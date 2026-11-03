@@ -1,4 +1,5 @@
 const axios = require('axios');
+const https = require('https');
 const yaml = require('yaml');
 const db = require('./db');
 const { parseSubscriptionContent } = require('./parser');
@@ -16,6 +17,27 @@ function broadcast(type, payload) {
       broadcastFn(type, payload);
     } catch (e) {}
   }
+}
+
+function buildRequestConfig(sub) {
+  const settings = db.getSettings();
+  const ignoreTlsVerify = settings.ignoreTlsVerify !== false;
+  const config = {
+    timeout: 15000,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      'Accept': '*/*'
+    },
+    responseType: 'text'
+  };
+
+  if (/^https:\/\//i.test(sub.url || '')) {
+    config.httpsAgent = new https.Agent({
+      rejectUnauthorized: !ignoreTlsVerify
+    });
+  }
+
+  return config;
 }
 
 async function fetchSubscription(subId) {
@@ -39,14 +61,7 @@ async function fetchSubscription(subId) {
       } catch (e) {}
     }
 
-    const response = await axios.get(sub.url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': DEFAULT_USER_AGENT,
-        'Accept': '*/*'
-      },
-      responseType: 'text'
-    });
+    const response = await axios.get(sub.url, buildRequestConfig(sub));
 
     const rawData = response.data;
     if (!rawData || typeof rawData !== 'string') {
@@ -149,7 +164,12 @@ async function fetchSubscription(subId) {
     };
 
   } catch (err) {
-    const errorMsg = err.response ? `HTTP ${err.response.status}: ${err.message}` : err.message;
+    let errorMsg = err.response ? `HTTP ${err.response.status}: ${err.message}` : err.message;
+    if (err.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+      errorMsg += '。证书域名与订阅地址不匹配；如确认订阅服务器可信，请在系统设置中开启「忽略 TLS 证书校验」后重试。';
+    } else if (err.code === 'CERT_HAS_EXPIRED' || /certificate has expired/i.test(err.message || '')) {
+      errorMsg += '。服务器证书已过期；确认服务器可信后，可在系统设置中开启「忽略 TLS 证书校验」后重试。';
+    }
     const failedSub = db.updateSubscription(subId, {
       lastStatus: 'failed',
       lastMessage: errorMsg

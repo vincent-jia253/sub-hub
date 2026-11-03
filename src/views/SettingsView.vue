@@ -8,7 +8,7 @@
       </div>
       <button class="btn btn-primary" @click="saveSettings" :disabled="saving">
         <Save :size="16" />
-        <span>{{ saving ? '保存中...' : '保存测速与定时配置' }}</span>
+        <span>{{ saving ? '保存中...' : '保存系统配置' }}</span>
       </button>
     </div>
 
@@ -39,6 +39,83 @@
             <input type="file" accept=".json" @change="handleConfigFileSelected" style="display: none;" />
           </label>
         </div>
+      </div>
+    </div>
+
+    <!-- Mihomo Core Version & Update -->
+    <div class="card glass core-card">
+      <div class="core-card-header">
+        <div class="core-title-wrap">
+          <div class="core-icon-box">
+            <Cpu :size="22" class="text-primary" />
+          </div>
+          <div>
+            <h3 class="core-title">Mihomo 内核</h3>
+            <p class="core-desc">查看当前运行版本，手动检查并安装 GitHub 最新稳定版内核。</p>
+          </div>
+        </div>
+        <span :class="['core-status-pill', coreInfo.installed ? 'is-ready' : 'is-missing']">
+          <CheckCircle2 v-if="coreInfo.installed" :size="14" />
+          <AlertCircle v-else :size="14" />
+          {{ coreInfo.loading ? '检测中' : coreInfo.installed ? '已安装' : '未安装' }}
+        </span>
+      </div>
+
+      <div class="core-card-body">
+        <div class="core-metrics">
+          <div class="core-metric">
+            <span class="core-metric-label">当前版本</span>
+            <strong class="core-metric-value">
+              {{ coreInfo.loading ? '检测中...' : (coreInfo.currentVersion || '未安装') }}
+            </strong>
+            <span class="core-metric-note" v-if="coreInfo.latestVersion">
+              最新稳定版 {{ coreInfo.latestVersion }}
+            </span>
+          </div>
+          <div class="core-metric">
+            <span class="core-metric-label">系统架构</span>
+            <strong class="core-metric-value">{{ coreInfo.platform || '-' }} / {{ coreInfo.arch || '-' }}</strong>
+            <span class="core-metric-note">自动匹配官方发布包</span>
+          </div>
+          <div class="core-metric core-path-metric">
+            <span class="core-metric-label">内核路径</span>
+            <strong class="core-metric-value core-path" :title="coreInfo.binaryPath">
+              {{ coreInfo.binaryPath || '自动检测中' }}
+            </strong>
+            <span class="core-metric-note" v-if="coreInfo.assetName">{{ coreInfo.assetName }}</span>
+          </div>
+        </div>
+
+        <div class="core-actions">
+          <button class="btn btn-secondary" @click="checkCoreUpdate" :disabled="coreInfo.checking || coreInfo.updating">
+            <RefreshCw :size="16" :class="{ 'animate-spin': coreInfo.checking }" />
+            <span>{{ coreInfo.checking ? '检查中...' : '检查更新' }}</span>
+          </button>
+          <button
+            class="btn btn-primary"
+            @click="updateMihomoCore"
+            :disabled="coreInfo.updating || coreInfo.checking || coreInfo.hasUpdate === false"
+          >
+            <DownloadCloud :size="16" />
+            <span>{{ coreUpdateButtonText }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="coreInfo.message" :class="['core-message', coreInfo.messageType]">
+        <AlertCircle v-if="coreInfo.messageType === 'error'" :size="15" />
+        <CheckCircle2 v-else :size="15" />
+        <span>{{ coreInfo.message }}</span>
+        <a
+          v-if="coreInfo.releaseUrl"
+          :href="coreInfo.releaseUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="core-release-link"
+        >
+          Release
+          <ExternalLink :size="13" />
+        </a>
       </div>
     </div>
 
@@ -80,12 +157,12 @@
         </div>
       </div>
 
-      <!-- Schedule & Automation -->
+      <!-- Refresh, Schedule & Network -->
       <div class="card glass">
         <div class="card-header">
           <div class="card-title">
             <Clock class="text-primary" :size="18" />
-            <span>定时刷新与自动化任务</span>
+            <span>订阅刷新与网络设置</span>
           </div>
         </div>
 
@@ -108,6 +185,19 @@
             <span class="cron-tag" @click="settings.autoRefreshInterval = '0 */6 * * *'">每 6 小时</span>
             <span class="cron-tag" @click="settings.autoRefreshInterval = '0 0,12 * * *'">每天两次</span>
             <span class="cron-tag" @click="settings.autoRefreshInterval = '0 4 * * *'">每天凌晨4点</span>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          <div class="setting-toggle-row">
+            <div class="setting-toggle-copy">
+              <span class="setting-toggle-title">忽略 TLS 证书校验</span>
+              <span class="hint">默认开启。开启后允许抓取证书过期、自签名或域名不匹配的 HTTPS 订阅；请仅在你信任订阅服务器时使用。</span>
+            </div>
+            <label class="switch" title="忽略 TLS 证书校验">
+              <input type="checkbox" v-model="settings.ignoreTlsVerify" />
+              <span class="slider round"></span>
+            </label>
           </div>
         </div>
       </div>
@@ -210,7 +300,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import {
   Save,
   Zap,
@@ -218,7 +308,13 @@ import {
   Lock,
   DatabaseBackup,
   Download,
-  Upload
+  Upload,
+  Cpu,
+  RefreshCw,
+  DownloadCloud,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink
 } from 'lucide-vue-next';
 import api from '../api';
 
@@ -230,12 +326,40 @@ const settings = reactive({
   testConcurrency: 15,
   autoRefreshEnabled: true,
   autoRefreshInterval: '0 */6 * * *',
-  autoTestAfterRefresh: true
+  autoTestAfterRefresh: true,
+  ignoreTlsVerify: true
 });
 
 const saving = ref(false);
 const exporting = ref(false);
 const importing = ref(false);
+
+const coreInfo = reactive({
+  loading: true,
+  installed: false,
+  currentVersion: null,
+  latestVersion: null,
+  hasUpdate: null,
+  binaryPath: '',
+  detectedBinaryPath: '',
+  platform: '',
+  arch: '',
+  assetName: '',
+  releaseUrl: '',
+  source: '',
+  checking: false,
+  updating: false,
+  message: '',
+  messageType: 'success'
+});
+
+const coreUpdateButtonText = computed(() => {
+  if (coreInfo.updating) return '更新中...';
+  if (coreInfo.hasUpdate === false) return '已是最新版本';
+  if (!coreInfo.installed) return '安装最新版';
+  if (coreInfo.hasUpdate === true) return '更新到最新版';
+  return '安装 / 更新内核';
+});
 
 const showImportModal = ref(false);
 const importPreview = ref(null);
@@ -253,6 +377,61 @@ const fetchSettings = async () => {
     const data = await api.get('/settings');
     Object.assign(settings, data);
   } catch (e) {}
+};
+
+const fetchCoreInfo = async () => {
+  coreInfo.loading = true;
+  try {
+    const data = await api.get('/system/mihomo');
+    Object.assign(coreInfo, data);
+  } catch (e) {
+    coreInfo.message = '读取 Mihomo 版本失败: ' + e.message;
+    coreInfo.messageType = 'error';
+  } finally {
+    coreInfo.loading = false;
+  }
+};
+
+const checkCoreUpdate = async () => {
+  coreInfo.checking = true;
+  coreInfo.message = '';
+  try {
+    const data = await api.post('/system/mihomo/check-update', {}, { timeout: 70000 });
+    Object.assign(coreInfo, data);
+    coreInfo.message = data.hasUpdate
+      ? `发现新版本 ${data.latestVersion}，当前版本 ${data.currentVersion || '未安装'}`
+      : `当前已是最新稳定版 ${data.latestVersion}`;
+    coreInfo.messageType = 'success';
+  } catch (e) {
+    coreInfo.message = '检查更新失败: ' + e.message;
+    coreInfo.messageType = 'error';
+  } finally {
+    coreInfo.checking = false;
+  }
+};
+
+const updateMihomoCore = async () => {
+  const action = coreInfo.installed ? '更新' : '安装';
+  if (!confirm(`确定要${action} Mihomo 内核吗？更新期间会暂时阻止新的测速任务。`)) return;
+
+  coreInfo.updating = true;
+  coreInfo.message = '';
+  try {
+    const data = await api.post('/system/mihomo/update', {}, { timeout: 240000 });
+    coreInfo.message = data.message;
+    coreInfo.messageType = 'success';
+    coreInfo.latestVersion = data.latestVersion;
+    coreInfo.hasUpdate = false;
+    await fetchCoreInfo();
+    coreInfo.message = data.message;
+    coreInfo.messageType = 'success';
+    coreInfo.releaseUrl = data.releaseUrl || coreInfo.releaseUrl;
+  } catch (e) {
+    coreInfo.message = '内核更新失败: ' + e.message;
+    coreInfo.messageType = 'error';
+  } finally {
+    coreInfo.updating = false;
+  }
 };
 
 const saveSettings = async () => {
@@ -361,6 +540,7 @@ const updatePassword = async () => {
 
 onMounted(() => {
   fetchSettings();
+  fetchCoreInfo();
 });
 </script>
 
@@ -448,11 +628,184 @@ onMounted(() => {
   margin: 0;
 }
 
+/* Mihomo 内核版本卡片 */
+.core-card {
+  padding: 22px 24px;
+  border-left: 4px solid var(--success);
+}
+
+.core-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.core-title-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.core-icon-box {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--primary-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.core-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.core-desc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.core-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.core-status-pill.is-ready {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.core-status-pill.is-missing {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.09);
+  border: 1px solid rgba(239, 68, 68, 0.24);
+}
+
+.core-card-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.core-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1.6fr);
+  gap: 20px;
+}
+
+.core-metric {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.core-metric-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.core-metric-value {
+  font-size: 14px;
+  color: var(--text-main);
+  font-weight: 650;
+}
+
+.core-metric-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.core-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.core-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.core-message {
+  margin-top: 16px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.core-message.success {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.core-message.error {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.core-message > span {
+  min-width: 0;
+}
+
+.core-release-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.core-release-link:hover {
+  text-decoration: underline;
+}
+
 /* 栅格布局 */
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 20px;
+}
+
+@media (max-width: 1180px) {
+  .core-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .core-path-metric {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 860px) {
@@ -513,6 +866,81 @@ onMounted(() => {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 4px;
+}
+
+.settings-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 2px 0;
+}
+
+.setting-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.setting-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.setting-toggle-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border-color);
+  transition: 0.2s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  transition: 0.2s;
+}
+
+.switch input:checked + .slider {
+  background: var(--primary);
+}
+
+.switch input:checked + .slider:before {
+  transform: translateX(18px);
+}
+
+.slider.round {
+  border-radius: 999px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
 }
 
 .cron-tag {
@@ -610,6 +1038,30 @@ onMounted(() => {
   }
 
   .backup-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .core-card {
+    padding: 18px 16px;
+  }
+
+  .core-card-body {
+    align-items: stretch;
+    gap: 18px;
+  }
+
+  .core-metrics {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .core-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .core-actions .btn {
     flex: 1;
     justify-content: center;
   }

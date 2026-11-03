@@ -59,6 +59,15 @@ class MihomoTester {
     return false;
   }
 
+  getBinaryPath() {
+    return this.mihomoBinary;
+  }
+
+  refreshBinary() {
+    this.mihomoBinary = this.findBinary();
+    return this.mihomoBinary;
+  }
+
   cleanProxyForMihomo(node) {
     // Clone node and filter out UI-specific fields before feeding into Mihomo yaml
     const p = { ...node };

@@ -28,6 +28,7 @@ const DEFAULT_DB = {
     autoRefreshInterval: '0 */6 * * *', // Default every 6 hours
     autoTestAfterRefresh: true,
     autoFilterFailed: false,
+    ignoreTlsVerify: true,
     cdnProvider: 'github' // 'github', 'jsdelivr', 'fastly'
   },
   subscriptions: [],

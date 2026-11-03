@@ -12,6 +12,7 @@ const { parseUri, parseSubscriptionContent } = require('./parser');
 const tester = require('./tester');
 const generator = require('./generator');
 const fetcher = require('./fetcher');
+const coreManager = require('./coreManager');
 const { fetchSubscription, fetchAllSubscriptions } = fetcher;
 const scheduler = require('./scheduler');
 
@@ -183,6 +184,38 @@ app.post('/api/settings', authMiddleware, (req, res) => {
   const updated = db.updateSettings(req.body);
   scheduler.restart();
   res.json(updated);
+});
+
+// Mihomo core version and manual update
+app.get('/api/system/mihomo', authMiddleware, async (req, res) => {
+  try {
+    res.json(await coreManager.getLocalCoreInfo());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/system/mihomo/check-update', authMiddleware, async (req, res) => {
+  try {
+    res.json(await coreManager.checkForUpdate());
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/system/mihomo/update', authMiddleware, async (req, res) => {
+  try {
+    const result = await coreManager.updateCore();
+    db.addLog('info', `Mihomo 内核更新操作：${result.message}`, {
+      currentVersion: result.currentVersion,
+      previousVersion: result.previousVersion || null,
+      downloadSource: result.downloadSource || null
+    });
+    res.json(result);
+  } catch (err) {
+    db.addLog('error', `Mihomo 内核更新失败：${err.message}`);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
 });
 
 // Subscriptions CRUD

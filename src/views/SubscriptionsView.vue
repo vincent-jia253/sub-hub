@@ -136,7 +136,7 @@
               <th width="110">节点数量</th>
               <th width="130">同步状态</th>
               <th width="140">添加时间</th>
-              <th width="140">更新策略</th>
+              <th width="160">更新策略</th>
               <th width="140">操作</th>
             </tr>
           </thead>
@@ -178,10 +178,18 @@
                 </span>
               </td>
               <td>
-                <span class="strategy-tag">
-                  <Clock :size="12" />
-                  <span>{{ sub.autoRefresh ? '自动刷新' : '手动刷新' }}</span>
-                </span>
+                <div class="strategy-info">
+                  <span class="strategy-tag">
+                    <Clock :size="12" />
+                    <span>{{ sub.autoRefresh ? '自动刷新' : '手动刷新' }}</span>
+                  </span>
+                  <span
+                    class="strategy-last-update"
+                    :title="sub.lastUpdate ? new Date(sub.lastUpdate).toLocaleString() : '尚未成功更新'"
+                  >
+                    上次更新：{{ sub.lastUpdate ? formatRelativeTime(sub.lastUpdate) : '尚未更新' }}
+                  </span>
+                </div>
               </td>
               <td>
                 <div class="table-btn-group">
@@ -1012,6 +1020,19 @@ defineExpose({
   gap: 4px;
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.strategy-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.strategy-last-update {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .date-text {
