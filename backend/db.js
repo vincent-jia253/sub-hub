@@ -29,7 +29,9 @@ const DEFAULT_DB = {
     autoTestAfterRefresh: true,
     autoFilterFailed: false,
     ignoreTlsVerify: true,
-    cdnProvider: 'github' // 'github', 'jsdelivr', 'fastly'
+    cdnProvider: 'github', // 'github', 'jsdelivr', 'fastly'
+    fofaEmail: '',
+    fofaApiKey: ''
   },
   subscriptions: [],
   nodes: [],
@@ -128,13 +130,14 @@ class Database {
 
   // --- Full Configuration Import & Export ---
   exportFullConfig() {
+    const { fofaApiKey, ...safeSettings } = this.data.settings;
     return {
       version: '1.0.0',
       exportTime: new Date().toISOString(),
       subscriptions: this.data.subscriptions,
       nodes: this.data.nodes,
       profiles: this.data.profiles,
-      settings: this.data.settings
+      settings: safeSettings
     };
   }
 
@@ -155,7 +158,8 @@ class Database {
         this.data.profiles = configData.profiles;
       }
       if (configData.settings && typeof configData.settings === 'object') {
-        this.data.settings = { ...this.data.settings, ...configData.settings };
+        const { fofaApiKey, ...safeSettings } = configData.settings;
+        this.data.settings = { ...this.data.settings, ...safeSettings };
       }
     } else {
       // 合并导入 (默认)：去重合并订阅、节点和聚合配置（优先按订阅IP去重）
@@ -201,7 +205,8 @@ class Database {
       }
 
       if (configData.settings && typeof configData.settings === 'object') {
-        this.data.settings = { ...this.data.settings, ...configData.settings };
+        const { fofaApiKey, ...safeSettings } = configData.settings;
+        this.data.settings = { ...this.data.settings, ...safeSettings };
       }
     }
 

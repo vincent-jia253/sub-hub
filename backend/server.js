@@ -13,6 +13,7 @@ const tester = require('./tester');
 const generator = require('./generator');
 const fetcher = require('./fetcher');
 const coreManager = require('./coreManager');
+const fofaManager = require('./fofaManager');
 const { fetchSubscription, fetchAllSubscriptions } = fetcher;
 const scheduler = require('./scheduler');
 
@@ -36,6 +37,11 @@ function broadcast(type, payload) {
   });
 }
 fetcher.setBroadcast(broadcast);
+
+function getPublicSettings() {
+  const { fofaApiKey, ...safeSettings } = db.getSettings();
+  return safeSettings;
+}
 
 // Auth Middleware for protected API routes
 function authMiddleware(req, res, next) {
@@ -177,13 +183,52 @@ app.get('/api/dashboard/stats', authMiddleware, (req, res) => {
 
 // Settings APIs
 app.get('/api/settings', authMiddleware, (req, res) => {
-  res.json(db.getSettings());
+  res.json(getPublicSettings());
 });
 
 app.post('/api/settings', authMiddleware, (req, res) => {
-  const updated = db.updateSettings(req.body);
+  const { fofaApiKey, fofaEmail, ...safeUpdates } = req.body || {};
+  db.updateSettings(safeUpdates);
   scheduler.restart();
-  res.json(updated);
+  res.json(getPublicSettings());
+});
+
+// FOFA discovery APIs
+app.get('/api/fofa/config', authMiddleware, (req, res) => {
+  res.json(fofaManager.getPublicConfig());
+});
+
+app.post('/api/fofa/config', authMiddleware, (req, res) => {
+  try {
+    res.json(fofaManager.saveConfig(req.body || {}));
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/fofa/scan', authMiddleware, (req, res) => {
+  try {
+    const job = fofaManager.startScan(req.body || {}, {
+      onProgress: snapshot => broadcast('fofa_progress', snapshot),
+      onCompleted: snapshot => broadcast('fofa_completed', snapshot),
+      onImported: sub => broadcast('subscription_updated', { id: sub.id, sub })
+    });
+    res.status(202).json(job);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/fofa/jobs/:id', authMiddleware, (req, res) => {
+  const job = fofaManager.getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'FOFA 扫描任务不存在或已过期' });
+  res.json(job);
+});
+
+app.post('/api/fofa/jobs/:id/cancel', authMiddleware, (req, res) => {
+  const job = fofaManager.cancelJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'FOFA 扫描任务不存在或已过期' });
+  res.json(job);
 });
 
 // Mihomo core version and manual update

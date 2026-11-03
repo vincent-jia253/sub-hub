@@ -46,6 +46,14 @@
           </button>
 
           <button
+            :class="['nav-item', { active: currentTab === 'fofa' }]"
+            @click="switchTab('fofa')"
+          >
+            <Radar :size="18" />
+            <span>FOFA 订阅发现</span>
+          </button>
+
+          <button
             :class="['nav-item', { active: currentTab === 'nodes' }]"
             @click="viewAllNodesMobile"
           >
@@ -139,6 +147,11 @@
             ref="subsViewRef"
             @view-nodes="handleViewSubNodes"
             @test-sub="handleStartSpeedTestSub"
+            @data-changed="refreshAllData"
+          />
+
+          <FofaView
+            v-else-if="currentTab === 'fofa'"
             @data-changed="refreshAllData"
           />
 
@@ -248,6 +261,7 @@ import {
   Zap,
   LayoutDashboard,
   Radio,
+  Radar,
   Layers,
   Shield,
   Settings,
@@ -266,6 +280,7 @@ import api from './api';
 import LoginModal from './components/LoginModal.vue';
 import DashboardView from './views/DashboardView.vue';
 import SubscriptionsView from './views/SubscriptionsView.vue';
+import FofaView from './views/FofaView.vue';
 import NodesView from './views/NodesView.vue';
 import ProfilesView from './views/ProfilesView.vue';
 import SettingsView from './views/SettingsView.vue';
@@ -347,6 +362,7 @@ const isRefreshingAllSubs = ref(false);
 const tabNames = {
   dashboard: '仪表盘概览',
   subscriptions: '机场订阅管理',
+  fofa: 'FOFA 订阅发现',
   nodes: '节点池与测速',
   profiles: '整合订阅生成 (Loyalsoldier 规则)',
   settings: '系统配置'
