@@ -46,14 +46,6 @@
           </button>
 
           <button
-            :class="['nav-item', { active: currentTab === 'fofa' }]"
-            @click="switchTab('fofa')"
-          >
-            <Radar :size="18" />
-            <span>FOFA 订阅发现</span>
-          </button>
-
-          <button
             :class="['nav-item', { active: currentTab === 'nodes' }]"
             @click="viewAllNodesMobile"
           >
@@ -76,6 +68,14 @@
           >
             <Settings :size="18" />
             <span>系统配置</span>
+          </button>
+
+          <button
+            :class="['nav-item', { active: currentTab === 'fofa' }]"
+            @click="switchTab('fofa')"
+          >
+            <Radar :size="18" />
+            <span>FOFA 订阅发现</span>
           </button>
         </nav>
 

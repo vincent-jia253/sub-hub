@@ -6,12 +6,20 @@
         <p class="subtitle">批量搜索公开资产，验证订阅内容并按 IP、节点数和实测可用节点自动筛选导入。</p>
       </div>
       <div class="header-actions">
-        <span :class="['credential-pill', hasCredential ? 'ready' : 'missing']">
+        <span
+          v-if="mode === 'api'"
+          :class="['credential-pill', hasCredential ? 'ready' : 'missing']"
+        >
           <CheckCircle2 v-if="hasCredential" :size="14" />
           <AlertCircle v-else :size="14" />
           {{ hasCredential ? 'FOFA 凭据已配置' : 'FOFA 凭据未配置' }}
         </span>
-        <button class="btn btn-secondary" @click="saveConfig(false)" :disabled="savingConfig">
+        <button
+          v-if="mode === 'api'"
+          class="btn btn-secondary"
+          @click="saveConfig(false)"
+          :disabled="savingConfig"
+        >
           <Save :size="15" />
           <span>{{ savingConfig ? '保存中...' : '保存凭据' }}</span>
         </button>
@@ -28,7 +36,7 @@
         <button v-else class="btn btn-primary" @click="startScan" :disabled="starting">
           <Loader2 v-if="starting" :size="15" class="animate-spin" />
           <Play v-else :size="15" />
-          <span>{{ starting ? '正在启动...' : '开始扫描' }}</span>
+          <span>{{ starting ? '正在启动...' : startButtonLabel }}</span>
         </button>
       </div>
     </div>
@@ -45,7 +53,7 @@
       <button class="message-close" title="关闭提示" @click="message.text = ''">×</button>
     </div>
 
-    <section class="card glass credentials-card">
+    <section v-if="mode === 'api'" class="card glass credentials-card">
       <div class="card-header compact-header">
         <div class="card-title">
           <KeyRound :size="18" class="text-primary" />
@@ -76,7 +84,7 @@
             :placeholder="apiKeyPlaceholder"
           />
           <span class="field-hint">
-            {{ config.apiKeyConfigured ? `已保存 ${config.apiKeyHint || '****'}，留空不会覆盖` : '普通账号可使用标准 Search API' }}
+            {{ config.apiKeyConfigured ? `已保存 ${config.apiKeyHint || '****'}，留空不会覆盖` : 'Search API 会消耗 FOFA F 点' }}
           </span>
         </div>
         <div class="credential-note">
@@ -92,18 +100,54 @@
         <div class="card-header compact-header">
           <div class="card-title">
             <Search :size="18" class="text-primary" />
-            <span>FOFA 查询语句</span>
+            <span>{{ mode === 'api' ? 'FOFA 查询语句' : '手动候选地址' }}</span>
           </div>
-          <span class="line-count">{{ queryCount }} 条</span>
+          <div class="query-tools">
+            <div class="mode-switch" role="tablist" aria-label="候选地址获取方式">
+              <button
+                :class="{ active: mode === 'api' }"
+                role="tab"
+                :aria-selected="mode === 'api'"
+                :disabled="isRunning"
+                @click="setMode('api')"
+              >
+                API 查询
+              </button>
+              <button
+                :class="{ active: mode === 'manual' }"
+                role="tab"
+                :aria-selected="mode === 'manual'"
+                :disabled="isRunning"
+                @click="setMode('manual')"
+              >
+                手动候选
+              </button>
+            </div>
+            <span class="line-count">{{ mode === 'api' ? `${queryCount} 条` : `${manualTargetCount} 个` }}</span>
+          </div>
         </div>
         <textarea
+          v-if="mode === 'api'"
           v-model="queries"
           class="query-textarea"
           rows="12"
           spellcheck="false"
           placeholder='每行一条，例如：body="mixed-port" && body="proxy-groups"'
         ></textarea>
-        <span class="field-hint">每行一条，自动去重；一次最多 30 条查询。</span>
+        <textarea
+          v-else
+          v-model="manualTargets"
+          class="query-textarea manual-textarea"
+          rows="12"
+          spellcheck="false"
+          placeholder='每行一个地址，例如：&#10;https://1.2.3.4:8443/&#10;5.6.7.8:2096&#10;sub.example.com'
+        ></textarea>
+        <span v-if="mode === 'api'" class="field-hint">
+          每行一条，自动去重；一次最多 30 条查询。官方 Search API 需要账号有可用 F 点。
+        </span>
+        <span v-else class="field-hint">
+          从 FOFA 网页搜索结果复制 host 或 IP:端口，每行一个；不调用 FOFA API，不消耗 F 点。
+        </span>
       </section>
 
       <section class="card glass options-card">
@@ -343,7 +387,9 @@ const options = reactive({
   autoImport: true
 });
 
+const mode = ref(localStorage.getItem('sub_fofa_mode') === 'manual' ? 'manual' : 'api');
 const queries = ref(localStorage.getItem('sub_fofa_queries') || DEFAULT_QUERIES);
+const manualTargets = ref(localStorage.getItem('sub_fofa_manual_targets') || '');
 const job = ref(null);
 const savingConfig = ref(false);
 const starting = ref(false);
@@ -354,6 +400,8 @@ const message = reactive({ text: '', type: 'success' });
 let pollTimer = null;
 
 const queryCount = computed(() => queries.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).length);
+const manualTargetCount = computed(() => manualTargets.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).length);
+const startButtonLabel = computed(() => (mode.value === 'manual' ? '开始验证' : '开始扫描'));
 const hasCredential = computed(() => Boolean(
   config.email && (config.apiKeyConfigured || config.usingEnvironmentKey || config.apiKey)
 ));
@@ -498,28 +546,35 @@ const refreshJob = async () => {
 };
 
 const startScan = async () => {
-  if (!queries.value.trim()) {
-    showMessage('请至少填写一条 FOFA 查询语句', 'error');
-    return;
-  }
-  if (!config.email) {
-    showMessage('请先填写 FOFA 账号邮箱', 'error');
-    return;
-  }
-  if (!hasCredential.value) {
-    showMessage('请先填写 FOFA API Key', 'error');
+  if (mode.value === 'api') {
+    if (!queries.value.trim()) {
+      showMessage('请至少填写一条 FOFA 查询语句', 'error');
+      return;
+    }
+    if (!config.email) {
+      showMessage('请先填写 FOFA 账号邮箱', 'error');
+      return;
+    }
+    if (!hasCredential.value) {
+      showMessage('请先填写 FOFA API Key', 'error');
+      return;
+    }
+  } else if (!manualTargets.value.trim()) {
+    showMessage('请至少填写一个候选地址', 'error');
     return;
   }
 
   starting.value = true;
   message.text = '';
   try {
-    const saved = await saveConfig(true);
-    if (!saved) return;
-    const data = await api.post('/fofa/scan', {
-      queries: queries.value,
-      ...options
-    }, { timeout: 30000 });
+    if (mode.value === 'api') {
+      const saved = await saveConfig(true);
+      if (!saved) return;
+    }
+    const payload = mode.value === 'api'
+      ? { mode: 'api', queries: queries.value, ...options }
+      : { mode: 'manual', manualTargets: manualTargets.value, ...options };
+    const data = await api.post('/fofa/scan', payload, { timeout: 30000 });
     job.value = data;
     localStorage.setItem('sub_fofa_job_id', data.id);
     schedulePoll(500);
@@ -528,6 +583,12 @@ const startScan = async () => {
   } finally {
     starting.value = false;
   }
+};
+
+const setMode = value => {
+  if (isRunning.value) return;
+  mode.value = value === 'manual' ? 'manual' : 'api';
+  message.text = '';
 };
 
 const cancelScan = async () => {
@@ -545,6 +606,8 @@ const cancelScan = async () => {
 };
 
 watch(queries, value => localStorage.setItem('sub_fofa_queries', value));
+watch(manualTargets, value => localStorage.setItem('sub_fofa_manual_targets', value));
+watch(mode, value => localStorage.setItem('sub_fofa_mode', value));
 
 onMounted(async () => {
   await fetchConfig();
@@ -737,11 +800,52 @@ onBeforeUnmount(clearPollTimer);
   font-size: 10.5px;
 }
 
+.query-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+}
+
+.mode-switch button {
+  padding: 4px 9px;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mode-switch button.active {
+  color: var(--primary);
+  background: var(--bg-card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.mode-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .query-textarea {
   flex: 1;
   min-height: 228px;
   line-height: 1.7;
   tab-size: 2;
+}
+
+.manual-textarea {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .query-card > .field-hint {

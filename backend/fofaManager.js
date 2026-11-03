@@ -325,6 +325,61 @@ function normalizeSearchRow(row, query) {
   };
 }
 
+function normalizeManualTargets(input) {
+  const lines = Array.isArray(input)
+    ? input
+    : String(input || '').split(/\r?\n/);
+  const targets = lines
+    .map(line => String(line || '').trim())
+    .filter(line => line && !line.startsWith('#'));
+
+  if (targets.length === 0) {
+    throw createError('请至少填写一个候选地址');
+  }
+  if (targets.length > MAX_CANDIDATES) {
+    throw createError(`一次最多填写 ${MAX_CANDIDATES} 个候选地址`);
+  }
+
+  const candidates = [];
+  const seen = new Set();
+  for (const target of targets) {
+    const scheme = target.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1]?.toLowerCase() || '';
+    if (scheme && !['http', 'https'].includes(scheme)) {
+      throw createError(`候选地址仅支持 HTTP/HTTPS: ${target}`);
+    }
+    const hasProtocol = Boolean(scheme);
+    let parsed;
+    try {
+      parsed = new URL(hasProtocol ? target : `http://${target}`);
+    } catch (error) {
+      throw createError(`候选地址格式无效: ${target}`);
+    }
+
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    const explicitProtocol = hasProtocol ? parsed.protocol.replace(':', '') : '';
+    const port = parsed.port ? Number(parsed.port) : 0;
+    const path = `${parsed.pathname || '/'}${parsed.search || ''}`;
+    const protocols = explicitProtocol
+      ? [explicitProtocol]
+      : [port === 80 ? 'http' : 'https', port === 80 ? 'https' : 'http'];
+    const urls = protocols.map(protocol => `${protocol}://${parsed.host}${path}`);
+    const key = urls[0];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({
+      query: '手动候选',
+      host: parsed.host,
+      ip: net.isIP(hostname) ? hostname : '',
+      port,
+      protocol: explicitProtocol,
+      title: '',
+      urls
+    });
+  }
+
+  return candidates;
+}
+
 async function searchFofa(query, { email, apiKey, page, size, signal }) {
   let response;
   try {
@@ -345,6 +400,17 @@ async function searchFofa(query, { email, apiKey, page, size, signal }) {
       }
     });
   } catch (error) {
+    let apiData = error.response?.data;
+    if (typeof apiData === 'string') {
+      try {
+        apiData = JSON.parse(apiData);
+      } catch (parseError) {
+        apiData = null;
+      }
+    }
+    if (apiData?.error && apiData.errmsg) {
+      throw createFofaApiError(apiData.errmsg);
+    }
     const status = error.response?.status ? `HTTP ${error.response.status}: ` : '';
     throw createError(`FOFA API 请求失败: ${status}${error.message}`);
   }
@@ -358,9 +424,7 @@ async function searchFofa(query, { email, apiKey, page, size, signal }) {
     }
   }
   if (data.error) {
-    const message = data.errmsg || '未知错误';
-    const fatal = /-700|账号无效|key.*(无效|错误)|email.*(无效|错误)/i.test(message);
-    throw createError(`FOFA API 返回错误: ${message}`, 400, fatal);
+    throw createFofaApiError(data.errmsg);
   }
   if (!Array.isArray(data.results)) {
     throw createError('FOFA API 返回格式不正确');
@@ -370,6 +434,19 @@ async function searchFofa(query, { email, apiKey, page, size, signal }) {
     total: Number(data.total || 0),
     results: data.results.map(row => normalizeSearchRow(row, query))
   };
+}
+
+function createFofaApiError(message) {
+  const text = String(message || '未知错误');
+  if (/820031|F\s*点余额不足|余额不足/i.test(text)) {
+    return createError(
+      'FOFA 账号 F 点余额不足，官方 Search API 无法执行。请充值或开通 API 额度，或切换到“手动候选地址”模式。',
+      400,
+      true
+    );
+  }
+  const fatal = /-700|账号无效|key.*(无效|错误)|email.*(无效|错误)/i.test(text);
+  return createError(`FOFA API 返回错误: ${text}`, 400, fatal);
 }
 
 function makeSubscriptionName(ip, port) {
@@ -618,6 +695,7 @@ function publicJob(job) {
   if (!job) return null;
   return {
     id: job.id,
+    mode: job.mode,
     status: job.status,
     phase: job.phase,
     createdAt: job.createdAt,
@@ -651,58 +729,62 @@ function notify(job, type = 'progress') {
 
 async function runJob(job) {
   job.status = 'running';
-  job.phase = 'searching';
+  job.phase = job.mode === 'manual' ? 'checking' : 'searching';
   job.startedAt = new Date().toISOString();
   notify(job);
 
   try {
-    const credentials = getCredentials();
-    const candidates = [];
-    const candidateKeys = new Set();
+    let candidates = [];
+    if (job.mode === 'manual') {
+      candidates = job.manualCandidates;
+    } else {
+      const credentials = getCredentials();
+      const candidateKeys = new Set();
 
-    searchLoop:
-    for (const query of job.queries) {
-      if (job.cancelled) throw createError('任务已取消', 409);
-      for (let page = 1; page <= job.options.maxPages; page++) {
-        let pageResult;
-        try {
-          pageResult = await searchFofa(query, {
-            ...credentials,
-            page,
-            size: job.options.pageSize,
-            signal: job.abortController.signal
-          });
-        } catch (error) {
-          if (job.cancelled || error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
-            throw createError('任务已取消', 409);
+      searchLoop:
+      for (const query of job.queries) {
+        if (job.cancelled) throw createError('任务已取消', 409);
+        for (let page = 1; page <= job.options.maxPages; page++) {
+          let pageResult;
+          try {
+            pageResult = await searchFofa(query, {
+              ...credentials,
+              page,
+              size: job.options.pageSize,
+              signal: job.abortController.signal
+            });
+          } catch (error) {
+            if (job.cancelled || error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+              throw createError('任务已取消', 409);
+            }
+            if (error.fatal) throw error;
+            job.queryErrors.push({ query, message: error.message });
+            break;
           }
-          if (error.fatal) throw error;
-          job.queryErrors.push({ query, message: error.message });
-          break;
-        }
 
-        job.stats.searchedResults += pageResult.results.length;
-        for (const candidate of pageResult.results) {
-          const key = [
-            candidate.ip || '',
-            candidate.host || '',
-            candidate.port || '',
-            candidate.urls[0] || ''
-          ].join('|');
-          if (candidateKeys.has(key)) continue;
-          if (candidates.length >= MAX_CANDIDATES) {
-            job.candidateLimitReached = true;
-            break searchLoop;
+          job.stats.searchedResults += pageResult.results.length;
+          for (const candidate of pageResult.results) {
+            const key = [
+              candidate.ip || '',
+              candidate.host || '',
+              candidate.port || '',
+              candidate.urls[0] || ''
+            ].join('|');
+            if (candidateKeys.has(key)) continue;
+            if (candidates.length >= MAX_CANDIDATES) {
+              job.candidateLimitReached = true;
+              break searchLoop;
+            }
+            candidateKeys.add(key);
+            candidates.push(candidate);
           }
-          candidateKeys.add(key);
-          candidates.push(candidate);
-        }
 
-        notify(job);
-        if (pageResult.results.length < job.options.pageSize || pageResult.total <= page * job.options.pageSize) {
-          break;
+          notify(job);
+          if (pageResult.results.length < job.options.pageSize || pageResult.total <= page * job.options.pageSize) {
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 250));
         }
-        await new Promise(resolve => setTimeout(resolve, 250));
       }
     }
 
@@ -768,7 +850,11 @@ function cleanupJobs() {
 
 function startScan(input = {}, hooks = {}) {
   cleanupJobs();
-  const queries = normalizeQueries(input.queries);
+  const mode = input.mode === 'manual' ? 'manual' : 'api';
+  const queries = mode === 'api' ? normalizeQueries(input.queries) : [];
+  const manualCandidates = mode === 'manual'
+    ? normalizeManualTargets(input.manualTargets)
+    : [];
   const options = {
     pageSize: clampInt(input.pageSize, 20, 1, 100),
     maxPages: clampInt(input.maxPages, 1, 1, 10),
@@ -787,12 +873,15 @@ function startScan(input = {}, hooks = {}) {
   if (options.maxAliveNodes > 0 && options.minAliveNodes > options.maxAliveNodes) {
     throw createError('最少可用节点数不能大于最多可用节点数');
   }
-  getCredentials();
+  if (mode === 'api') {
+    getCredentials();
+  }
 
   const id = `fofa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const settings = db.getSettings();
   const job = {
     id,
+    mode,
     status: 'queued',
     phase: 'queued',
     createdAt: new Date().toISOString(),
@@ -802,6 +891,7 @@ function startScan(input = {}, hooks = {}) {
     cancelled: false,
     abortController: new AbortController(),
     queries,
+    manualCandidates,
     options,
     ignoreTlsVerify: settings.ignoreTlsVerify !== false,
     hooks,
