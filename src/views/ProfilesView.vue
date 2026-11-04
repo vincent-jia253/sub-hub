@@ -59,6 +59,10 @@
                 <Copy v-else :size="13" />
                 <span>{{ copiedKey === 'clash_' + prof.id ? '已复制！' : '复制链接' }}</span>
               </button>
+              <button class="btn btn-secondary btn-sm" title="扫码导入" @click="openQr(prof, 'clash')">
+                <QrCode :size="13" />
+                <span>二维码</span>
+              </button>
             </div>
           </div>
 
@@ -74,6 +78,10 @@
                 <Check v-if="copiedKey === 'base64_' + prof.id" :size="13" class="text-success" />
                 <Copy v-else :size="13" />
                 <span>{{ copiedKey === 'base64_' + prof.id ? '已复制！' : '复制链接' }}</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" title="扫码导入" @click="openQr(prof, 'base64')">
+                <QrCode :size="13" />
+                <span>二维码</span>
               </button>
             </div>
           </div>
@@ -202,11 +210,62 @@
         </div>
       </div>
     </div>
+
+    <!-- QR Code Modal -->
+    <div v-if="showQr" class="modal-backdrop" @click.self="showQr = false">
+      <div class="modal-card glass modal-qr">
+        <div class="modal-header">
+          <div>
+            <h3>订阅二维码</h3>
+            <p class="qr-subtitle">{{ qrProfile?.name }}</p>
+          </div>
+          <button class="modal-close" @click="showQr = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="qr-tabs">
+            <button
+              class="qr-tab"
+              :class="{ active: qrFormat === 'clash' }"
+              @click="switchQrFormat('clash')"
+            >Clash / Mihomo</button>
+            <button
+              class="qr-tab"
+              :class="{ active: qrFormat === 'base64' }"
+              @click="switchQrFormat('base64')"
+            >Base64 / 通用</button>
+          </div>
+
+          <div class="qr-canvas-box">
+            <canvas ref="qrCanvasRef"></canvas>
+          </div>
+
+          <div class="qr-url-box">
+            <span class="qr-url">{{ qrUrl }}</span>
+            <button class="btn btn-secondary btn-sm" @click="copyLink(qrUrl, 'qr')">
+              <Check v-if="copiedKey === 'qr'" :size="13" class="text-success" />
+              <Copy v-else :size="13" />
+              <span>{{ copiedKey === 'qr' ? '已复制！' : '复制' }}</span>
+            </button>
+          </div>
+
+          <p class="qr-hint">
+            手机客户端里选「扫描二维码 / 从二维码导入」，对准屏幕即可添加，无需手动输入链接。
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="downloadQr">
+            <Download :size="14" />
+            <span>下载 PNG</span>
+          </button>
+          <button class="btn btn-primary" @click="showQr = false">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, nextTick } from 'vue';
 import {
   Plus,
   Shield,
@@ -218,8 +277,11 @@ import {
   Eye,
   Edit3,
   Trash2,
-  Loader2
+  Loader2,
+  QrCode,
+  Download
 } from 'lucide-vue-next';
+import QRCode from 'qrcode';
 import api from '../api';
 import axios from 'axios';
 import { copyToClipboard } from '../utils/clipboard';
@@ -246,6 +308,53 @@ const showPreview = ref(false);
 const previewLoading = ref(false);
 const previewContent = ref('');
 const previewTarget = ref(null);
+
+// ---- QR code ----
+const showQr = ref(false);
+const qrProfile = ref(null);
+const qrFormat = ref('clash');
+const qrUrl = ref('');
+const qrCanvasRef = ref(null);
+
+const renderQr = async () => {
+  if (!qrProfile.value) return;
+  qrUrl.value = getFullSubUrl(qrProfile.value.token, qrFormat.value);
+  await nextTick();
+  if (!qrCanvasRef.value) return;
+  try {
+    await QRCode.toCanvas(qrCanvasRef.value, qrUrl.value, {
+      width: 520,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#000000ff', light: '#ffffffff' }
+    });
+  } catch (e) {
+    console.error('二维码生成失败', e);
+  }
+};
+
+const openQr = async (prof, format = 'clash') => {
+  qrProfile.value = prof;
+  qrFormat.value = format;
+  showQr.value = true;
+  await renderQr();
+};
+
+const switchQrFormat = async (format) => {
+  if (qrFormat.value === format) return;
+  qrFormat.value = format;
+  await renderQr();
+};
+
+const downloadQr = () => {
+  const canvas = qrCanvasRef.value;
+  if (!canvas || !qrProfile.value) return;
+  const link = document.createElement('a');
+  const safeName = (qrProfile.value.name || 'subscription').replace(/[\\/:*?"<>|\s]+/g, '_');
+  link.download = `${safeName}_${qrFormat.value}.png`;
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+};
 
 const fetchProfiles = async () => {
   try {
@@ -462,6 +571,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .link-url {
@@ -570,6 +680,90 @@ onMounted(() => {
 
 .modal-xl {
   max-width: 850px;
+}
+
+/* QR Code Modal */
+.modal-qr {
+  max-width: 460px;
+}
+
+.qr-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.qr-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.qr-tab {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.qr-tab:hover {
+  color: var(--text-main);
+}
+
+.qr-tab.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 4px 12px var(--primary-glow);
+}
+
+.qr-canvas-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #fff;
+  border-radius: var(--radius-md);
+}
+
+.qr-canvas-box canvas {
+  width: 260px !important;
+  height: 260px !important;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.qr-url-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.qr-url {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.qr-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
 }
 
 /* Switch Styles */
