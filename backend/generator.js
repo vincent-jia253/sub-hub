@@ -1,6 +1,8 @@
 const yaml = require('yaml');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 
 // Rule-providers definitions based on Loyalsoldier/clash-rules
 const DEFAULT_LOYAL_RULE_PROVIDERS = (baseUrl) => ({
@@ -309,6 +311,10 @@ function generateClashSubscription(rawNodes, profile = {}) {
     }
     if (custom.extraConfig && typeof custom.extraConfig === 'object') {
       Object.assign(config, custom.extraConfig);
+      if (custom.extraConfig['mixed-port']) {
+        delete config.port;
+        delete config['socks-port'];
+      }
     }
   }
 
@@ -373,10 +379,60 @@ function generateBase64Subscription(nodes) {
   return Buffer.from(lines.join('\n')).toString('base64');
 }
 
+// ===== 远程规则配置（rule fork 的 overwrite.yaml，分支 sub-hub）=====
+const REMOTE_RULE_URL = 'https://gh-proxy.com/https://raw.githubusercontent.com/vincent-jia253/rule/sub-hub/config/mihomo/config/overwrite.yaml';
+let cachedRemoteConfig = null;
+
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.get(url, { timeout: 20000 }, (res) => {
+      if (res.statusCode !== 200) { req.destroy(); reject(new Error('HTTP ' + res.statusCode)); return; }
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(data));
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+  });
+}
+
+function yamlToCustomConfig(raw) {
+  const doc = yaml.parse(raw);
+  if (!doc || typeof doc !== 'object') return null;
+  const extra = {};
+  const extraKeys = ['mixed-port','allow-lan','bind-address','ipv6','unified-delay','tcp-concurrent','log-level','keep-alive-idle','keep-alive-interval','profile','external-controller','secret','external-ui','external-ui-url','tun','sniffer'];
+  for (const k of extraKeys) if (doc[k] !== undefined) extra[k] = doc[k];
+  return {
+    buildProxyGroups: () => (Array.isArray(doc['proxy-groups']) ? doc['proxy-groups'] : []),
+    rules: Array.isArray(doc.rules) ? doc.rules : [],
+    ruleProviders: doc['rule-providers'] || {},
+    dns: doc.dns || {},
+    extraConfig: extra
+  };
+}
+
+async function refreshCustomConfig() {
+  try {
+    const raw = await httpGet(REMOTE_RULE_URL);
+    const cfg = yamlToCustomConfig(raw);
+    if (cfg) {
+      cachedRemoteConfig = cfg;
+      console.log('[custom] 远程规则配置已加载');
+    }
+  } catch (e) {
+    console.error('[custom] 拉取远程规则失败:', e.message);
+  }
+}
+
+refreshCustomConfig();
+setInterval(refreshCustomConfig, 6 * 3600 * 1000);
+
 /**
  * Load custom generator override: backend/custom-generator.js 优先, 回退 data/generator-override.js
  */
 function loadCustomConfig() {
+  if (cachedRemoteConfig) return cachedRemoteConfig;
   const candidates = [
     path.join(__dirname, 'custom-generator.js'),
     path.join(__dirname, '..', 'data', 'generator-override.js')
