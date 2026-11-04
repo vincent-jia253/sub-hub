@@ -388,9 +388,9 @@ function httpGet(url) {
     const mod = url.startsWith('https') ? https : http;
     const req = mod.get(url, { timeout: 20000 }, (res) => {
       if (res.statusCode !== 200) { req.destroy(); reject(new Error('HTTP ' + res.statusCode)); return; }
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     });
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
     req.on('error', reject);
