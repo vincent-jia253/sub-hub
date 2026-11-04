@@ -154,7 +154,7 @@ class MihomoTester {
       secret: secret,
       dns: {
         enable: true,
-        ipv6: false,
+        ipv6: true,
         'enhanced-mode': 'redir-host',
         nameserver: [
           '223.5.5.5',

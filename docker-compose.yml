@@ -6,8 +6,7 @@ services:
     image: sub-aggregator:latest
     container_name: sub-aggregator
     restart: unless-stopped
-    ports:
-      - "3580:3580"
+    network_mode: host
     environment:
       - PORT=3580
       - TZ=Asia/Shanghai

@@ -30,6 +30,39 @@ function safeEncodeBase64(str) {
   return Buffer.from(str, 'utf8').toString('base64');
 }
 
+// 信息假节点识别（流量/到期/重置/官网等）
+const INFO_NODE_PATTERN = /(剩余|流量|到期|重置|套餐|官网|剩余天数|下次重置|已用|总量|Expire|expire|Traffic|traffic|过期)/i;
+
+function isInfoNode(node) {
+  const name = (node && node.name) || '';
+  return INFO_NODE_PATTERN.test(name);
+}
+
+function cleanServer(s) {
+  if (typeof s !== 'string') return s;
+  return s.replace(/^\[|\]$/g, '');
+}
+
+function sanitizeNode(node) {
+  if (!node || typeof node !== 'object') return node;
+  const out = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (typeof v === 'string') {
+      let cleaned = v.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+      if (k === 'server' || k === 'host') cleaned = cleanServer(cleaned);
+      out[k] = cleaned;
+    } else if (Array.isArray(v)) {
+      out[k] = v.map(x => sanitizeNode(x));
+    } else if (v && typeof v === 'object') {
+      out[k] = sanitizeNode(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+
 // 1. VMess
 function parseVmess(uri) {
   try {
@@ -388,7 +421,7 @@ function parseSubscriptionContent(rawText, yamlParser) {
             });
           }
         });
-        if (nodes.length > 0) return nodes;
+        if (nodes.length > 0) return nodes.filter(n => !isInfoNode(n)).map(sanitizeNode);
       }
     } catch (e) {
       // not yaml or yaml parse error, continue
@@ -415,7 +448,7 @@ function parseSubscriptionContent(rawText, yamlParser) {
     }
   });
 
-  return nodes;
+  return nodes.filter(n => !isInfoNode(n)).map(sanitizeNode);
 }
 
 module.exports = {

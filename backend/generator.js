@@ -1,4 +1,6 @@
 const yaml = require('yaml');
+const fs = require('fs');
+const path = require('path');
 
 // Rule-providers definitions based on Loyalsoldier/clash-rules
 const DEFAULT_LOYAL_RULE_PROVIDERS = (baseUrl) => ({
@@ -286,6 +288,30 @@ function generateClashSubscription(rawNodes, profile = {}) {
     ];
   }
 
+  // 自定义规则/策略组覆盖（backend/custom-generator.js 或 data/generator-override.js）
+  const custom = loadCustomConfig();
+  if (custom) {
+    if (typeof custom.buildProxyGroups === 'function') {
+      const customGroups = custom.buildProxyGroups(proxyNames);
+      if (Array.isArray(customGroups) && customGroups.length > 0) {
+        proxyGroups.splice(0, proxyGroups.length, ...customGroups);
+        config['proxy-groups'] = proxyGroups;
+      }
+    }
+    if (Array.isArray(custom.rules) && custom.rules.length > 0) {
+      config.rules = custom.rules;
+    }
+    if (custom.ruleProviders && typeof custom.ruleProviders === 'object') {
+      config['rule-providers'] = custom.ruleProviders;
+    }
+    if (custom.dns && typeof custom.dns === 'object') {
+      config.dns = custom.dns;
+    }
+    if (custom.extraConfig && typeof custom.extraConfig === 'object') {
+      Object.assign(config, custom.extraConfig);
+    }
+  }
+
   return yaml.stringify(config);
 }
 
@@ -345,6 +371,26 @@ function generateBase64Subscription(nodes) {
   }
 
   return Buffer.from(lines.join('\n')).toString('base64');
+}
+
+/**
+ * Load custom generator override: backend/custom-generator.js 优先, 回退 data/generator-override.js
+ */
+function loadCustomConfig() {
+  const candidates = [
+    path.join(__dirname, 'custom-generator.js'),
+    path.join(__dirname, '..', 'data', 'generator-override.js')
+  ];
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file)) {
+        return require(file);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  return null;
 }
 
 module.exports = {
