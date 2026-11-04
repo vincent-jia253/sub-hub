@@ -329,13 +329,19 @@ function generateClashSubscription(rawNodes, profile = {}) {
  */
 function generateBase64Subscription(nodes) {
   const lines = [];
+  // IPv6 地址在分享链接里必须加方括号，否则客户端无法区分地址和端口
+  const hostOf = (node) => {
+    const host = String(node.server || '');
+    if (host.includes(':') && !host.startsWith('[')) return `[${host}]`;
+    return host;
+  };
 
   for (const node of nodes) {
     try {
       if (node.type === 'ss') {
         const userinfo = Buffer.from(`${node.cipher}:${node.password}`).toString('base64');
         const encodedName = encodeURIComponent(node.name || 'SS');
-        lines.push(`ss://${userinfo}@${node.server}:${node.port}#${encodedName}`);
+        lines.push(`ss://${userinfo}@${hostOf(node)}:${node.port}#${encodedName}`);
       } else if (node.type === 'vmess') {
         const vmessObj = {
           v: '2',
@@ -357,7 +363,7 @@ function generateBase64Subscription(nodes) {
         const params = new URLSearchParams();
         if (node.sni) params.set('sni', node.sni);
         if (node.network) params.set('type', node.network);
-        lines.push(`trojan://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+        lines.push(`trojan://${encodeURIComponent(node.password)}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
       } else if (node.type === 'vless') {
         const params = new URLSearchParams();
         if (node.tls) params.set('security', node['reality-opts'] ? 'reality' : 'tls');
@@ -368,13 +374,15 @@ function generateBase64Subscription(nodes) {
         if (node['reality-opts']?.['public-key']) params.set('pbk', node['reality-opts']['public-key']);
         if (node['reality-opts']?.['short-id']) params.set('sid', node['reality-opts']['short-id']);
         if (node.servername) params.set('sni', node.servername);
-        lines.push(`vless://${node.uuid}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+        if (node['client-fingerprint']) params.set('fp', node['client-fingerprint']);
+        if (node['skip-cert-verify'] === true) params.set('allowInsecure', '1');
+        lines.push(`vless://${node.uuid}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
       } else if (node.type === 'hysteria2') {
         const params = new URLSearchParams();
         if (node.sni) params.set('sni', node.sni);
         if (node.obfs) params.set('obfs', node.obfs);
         if (node['obfs-password']) params.set('obfs-password', node['obfs-password']);
-        lines.push(`hy2://${encodeURIComponent(node.password || node.auth)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
+        lines.push(`hysteria2://${encodeURIComponent(node.password || node.auth)}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
       }
     } catch (e) {}
   }
