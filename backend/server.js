@@ -672,7 +672,11 @@ if (fs.existsSync(DIST_PATH)) {
 server.listen(PORT, () => {
   console.log(`===============================================`);
   console.log(`SUB 聚合订阅管理平台已启动: http://127.0.0.1:${PORT}`);
-  console.log(`默认管理员账号: admin / admin123456`);
+  if (db.getUser().hasDefaultPassword) {
+    console.log(`[安全提示] 当前仍在使用默认口令 admin / admin123456，请立即在「系统配置」中修改`);
+  } else {
+    console.log(`管理员口令已自定义`);
+  }
   console.log(`===============================================`);
   scheduler.init();
 });

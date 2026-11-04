@@ -14,7 +14,7 @@
           <label>管理账号</label>
           <div class="input-with-icon">
             <User :size="18" class="input-icon" />
-            <input v-model="form.username" type="text" placeholder="默认 admin" required autocomplete="username" />
+            <input v-model="form.username" type="text" placeholder="请输入管理账号" required autocomplete="username" />
           </div>
         </div>
 
@@ -22,7 +22,7 @@
           <label>访问密码</label>
           <div class="input-with-icon">
             <Lock :size="18" class="input-icon" />
-            <input v-model="form.password" type="password" placeholder="默认 admin123456" required autocomplete="current-password" />
+            <input v-model="form.password" type="password" placeholder="请输入访问密码" required autocomplete="current-password" />
           </div>
         </div>
 

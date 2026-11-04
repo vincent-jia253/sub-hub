@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const { applyAutoSelectExclude } = require('./local-overrides');
 
 // Rule-providers definitions based on Loyalsoldier/clash-rules
 const DEFAULT_LOYAL_RULE_PROVIDERS = (baseUrl) => ({
@@ -296,7 +297,9 @@ function generateClashSubscription(rawNodes, profile = {}) {
     if (typeof custom.buildProxyGroups === 'function') {
       const customGroups = custom.buildProxyGroups(proxyNames);
       if (Array.isArray(customGroups) && customGroups.length > 0) {
-        proxyGroups.splice(0, proxyGroups.length, ...customGroups);
+        // 把本地私有排除名单注入到 filter（公开规则仓库里不出现任何机场/节点名）
+        const mergedGroups = applyAutoSelectExclude(customGroups);
+        proxyGroups.splice(0, proxyGroups.length, ...mergedGroups);
         config['proxy-groups'] = proxyGroups;
       }
     }

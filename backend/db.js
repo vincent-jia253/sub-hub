@@ -3,6 +3,7 @@ const path = require('path');
 const net = require('net');
 const dns = require('dns').promises;
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
@@ -39,7 +40,7 @@ const DEFAULT_DB = {
     {
       id: 'default-profile',
       name: '主力整合订阅 (Loyalsoldier 完整分流)',
-      token: 'sub_' + Math.random().toString(36).substring(2, 10),
+      token: 'sub_' + crypto.randomBytes(16).toString('hex'),
       enabled: true,
       subIds: [], // Empty means all enabled subscriptions
       onlyAlive: false,
@@ -577,7 +578,7 @@ class Database {
 
   addProfile(prof) {
     const id = prof.id || 'prof_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
-    const token = prof.token || 'sub_' + Math.random().toString(36).substring(2, 10);
+    const token = prof.token || 'sub_' + crypto.randomBytes(16).toString('hex');
     const newProf = {
       id,
       name: prof.name || '新建整合订阅',

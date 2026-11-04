@@ -68,12 +68,14 @@ const rules = [
   'MATCH,🐟 漏网之鱼'
 ];
 
-// 自动选择(url-test)分组里排除的节点名(精确匹配, 可追加)
-const AUTO_SELECT_EXCLUDE = ['花屿云_香港'];
+// 自动选择(url-test)分组里排除的节点名(精确匹配)
+// 名单来自本地私有文件 data/auto-select-exclude.json（已 gitignore，不随仓库分发），
+// 这样公开代码里不需要出现任何机场/节点名称。
+const { getAutoSelectExclude } = require('./local-overrides');
 
 function buildProxyGroups(proxyNames) {
   const nodes = (proxyNames && proxyNames.length) ? proxyNames : ['DIRECT'];
-  const autoNodes = nodes.filter(n => !AUTO_SELECT_EXCLUDE.includes(n));
+  const autoNodes = nodes.filter(n => !getAutoSelectExclude().includes(n));
   const TEST_URL = 'https://www.gstatic.com/generate_204';
 
   const sel = (name) => ({
@@ -143,4 +145,12 @@ const extraConfig = {
   }
 };
 
-module.exports = { ruleProviders, rules, buildProxyGroups, dns, extraConfig, AUTO_SELECT_EXCLUDE };
+module.exports = {
+  ruleProviders,
+  rules,
+  buildProxyGroups,
+  dns,
+  extraConfig,
+  // 兼容旧调用方：动态读取本地私有排除名单
+  get AUTO_SELECT_EXCLUDE() { return getAutoSelectExclude(); }
+};
