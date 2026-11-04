@@ -383,7 +383,13 @@ function generateBase64Subscription(nodes) {
 }
 
 // ===== 远程规则配置（rule fork 的 overwrite.yaml，分支 sub-hub）=====
-const REMOTE_RULE_URL = 'https://gh-proxy.com/https://raw.githubusercontent.com/vincent-jia253/rule/sub-hub/config/mihomo/config/overwrite.yaml';
+const REMOTE_RULE_PATH = 'vincent-jia253/rule/sub-hub/config/mihomo/config/overwrite.yaml';
+// 多镜像 + 每次带时间戳查询参数，绕开 CDN/加速层的旧缓存
+const REMOTE_RULE_MIRRORS = [
+  `https://gh-proxy.com/https://raw.githubusercontent.com/${REMOTE_RULE_PATH}`,
+  `https://cdn.jsdelivr.net/gh/vincent-jia253/rule@sub-hub/config/mihomo/config/overwrite.yaml`,
+  `https://raw.githubusercontent.com/${REMOTE_RULE_PATH}`
+];
 let cachedRemoteConfig = null;
 
 function httpGet(url) {
@@ -416,16 +422,23 @@ function yamlToCustomConfig(raw) {
 }
 
 async function refreshCustomConfig() {
-  try {
-    const raw = await httpGet(REMOTE_RULE_URL);
-    const cfg = yamlToCustomConfig(raw);
-    if (cfg) {
-      cachedRemoteConfig = cfg;
-      console.log('[custom] 远程规则配置已加载');
+  const stamp = Date.now();
+  for (const mirror of REMOTE_RULE_MIRRORS) {
+    const url = mirror + (mirror.includes('?') ? '&' : '?') + 't=' + stamp;
+    try {
+      const raw = await httpGet(url);
+      const cfg = yamlToCustomConfig(raw);
+      if (cfg && Array.isArray(cfg.buildProxyGroups()) && cfg.buildProxyGroups().length > 0) {
+        cachedRemoteConfig = cfg;
+        console.log('[custom] 远程规则配置已加载:', new URL(mirror).host);
+        return;
+      }
+      console.warn('[custom] 镜像内容异常，跳过:', mirror);
+    } catch (e) {
+      console.warn('[custom] 镜像拉取失败:', new URL(mirror).host, e.message);
     }
-  } catch (e) {
-    console.error('[custom] 拉取远程规则失败:', e.message);
   }
+  if (!cachedRemoteConfig) console.error('[custom] 所有镜像均失败，回退本地规则');
 }
 
 refreshCustomConfig();
