@@ -569,6 +569,7 @@
       v-if="detailNode"
       :node="detailNode"
       :sub-name="detailSubName"
+      :all-nodes="nodes"
       @close="detailNode = null"
       @test-delay="testSingleNode"
       @test-speed="speedTestSingleNode"
