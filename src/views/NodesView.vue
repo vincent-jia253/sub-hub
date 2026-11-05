@@ -202,12 +202,14 @@
           :key="node.id"
           class="node-card glass"
           :class="{ 'card-selected': selectedIds.includes(node.id) }"
+          @click="openDetail(node)"
         >
           <div class="nc-top">
             <input
               type="checkbox"
               :value="node.id"
               v-model="selectedIds"
+              @click.stop
             />
             <span class="nc-name" :title="node.name">{{ node.name }}</span>
             <span class="nc-badge">{{ (node.type || '').toUpperCase() }}</span>
@@ -291,7 +293,7 @@
             </div>
           </div>
 
-          <div class="nc-actions">
+          <div class="nc-actions" @click.stop>
             <button class="action-btn" title="单独测延迟 (超时自动重试3次)" :disabled="testingNodeIds.has(node.id) || bundleBusy" @click="testSingleNode(node)">
               <Zap v-if="!testingNodeIds.has(node.id)" :size="15" />
               <Loader2 v-else :size="15" class="animate-spin" />
@@ -561,6 +563,18 @@
         </form>
       </div>
     </div>
+
+    <!-- 节点详情弹层：时间范围 + 色块 + 折线图 -->
+    <NodeDetailModal
+      v-if="detailNode"
+      :node="detailNode"
+      :sub-name="detailSubName"
+      @close="detailNode = null"
+      @test-delay="testSingleNode"
+      @test-speed="speedTestSingleNode"
+      @clear="clearNodeResults"
+      @edit="openEditNode"
+    />
   </div>
 </template>
 
@@ -591,6 +605,7 @@ import {
   X
 } from 'lucide-vue-next';
 import api from '../api';
+import NodeDetailModal from '../components/NodeDetailModal.vue';
 
 const props = defineProps({
   initialSubId: { type: String, default: '' },
@@ -603,6 +618,7 @@ const emit = defineEmits(['start-test', 'data-changed']);
 const nodes = ref([]);
 const subs = ref([]);
 const loading = ref(false);
+const detailNode = ref(null); // 详情弹层当前节点（引用，WS 更新实时可见）
 const selectedIds = ref([]);
 const testingNodeIds = ref(new Set());
 const speedTesting = ref(false);
@@ -678,6 +694,13 @@ const expireText = (node) => {
   const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   return days <= 0 ? `${dateStr} 已到期` : `${dateStr}（剩 ${days} 天）`;
 };
+
+const openDetail = (node) => { detailNode.value = node; };
+const detailSubName = computed(() => {
+  if (!detailNode.value) return '';
+  const sub = realSubOf(detailNode.value);
+  return sub ? sub.name : '';
+});
 
 /* ---------------- 卡片：网速总结（带宽历史） ---------------- */
 
@@ -1981,10 +2004,12 @@ defineExpose({
   flex-direction: column;
   gap: 10px;
   transition: box-shadow 0.15s ease, transform 0.15s ease;
+  cursor: pointer;
 }
 
 .node-card:hover {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
 }
 
 .node-card.card-selected {
