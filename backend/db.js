@@ -40,7 +40,15 @@ const DEFAULT_DB = {
     speedTestUrl: 'https://speed.cloudflare.com/__down?bytes=31457280',
     speedTestDurationMs: 6000,
     speedTestMaxBytes: 50331648,
-    speedTestConcurrency: 1
+    speedTestConcurrency: 1,
+    // ---- 定时测速（延迟 + 网速 捆绑任务）----
+    schedTestEnabled: false,
+    schedTestCron: '0 4 * * *',
+    schedTestMode: 'both', // 'both' 先延迟后网速 / 'delay' 仅延迟 / 'speed' 仅网速
+    schedTestScope: 'combined', // 'combined' | 'alive' | 'all' | 'custom'
+    schedTestNodeIds: [], // scope=custom 时生效
+    schedTestRetries: 3,
+    schedTestSpeedAliveOnly: true, // 网速阶段只测本轮延迟存活的节点
   },
   subscriptions: [],
   nodes: [],
@@ -489,6 +497,48 @@ class Database {
     return count;
   }
 
+  /**
+   * 清理节点的测速结果
+   * @param {Object} opts { ids?: string[], types: ('delay'|'speed')[] }
+   * @returns {{ count:number, types:string[], scope:string }}
+   */
+  clearTestResults({ ids, types } = {}) {
+    const wantTypes = Array.isArray(types) && types.length
+      ? types.filter(t => t === 'delay' || t === 'speed')
+      : ['delay', 'speed'];
+    if (wantTypes.length === 0) return { count: 0, types: [], scope: 'none' };
+
+    const hasIds = Array.isArray(ids) && ids.length > 0;
+    const idSet = hasIds ? new Set(ids) : null;
+    let count = 0;
+
+    this.data.nodes.forEach(n => {
+      if (idSet && !idSet.has(n.id)) return;
+      if (wantTypes.includes('delay')) {
+        n.delay = 0;
+        n.status = 'untested';
+        n.lastTestTime = null;
+        n.retriesUsed = 0;
+      }
+      if (wantTypes.includes('speed')) {
+        n.speed = null;
+        n.speedMbps = 0;
+        n.speedBps = 0;
+        n.speedBytes = 0;
+        n.speedDurationMs = 0;
+        n.speedFirstByteMs = 0;
+        n.speedUrl = '';
+        n.speedStatus = 'untested';
+        n.speedError = '';
+        n.speedTime = null;
+      }
+      count++;
+    });
+
+    if (count > 0) this.save();
+    return { count, types: wantTypes, scope: hasIds ? 'selected' : 'all' };
+  }
+
   updateNode(id, updates) {
     const idx = this.data.nodes.findIndex(n => n.id === id);
     if (idx === -1) return null;
@@ -497,8 +547,7 @@ class Database {
     return this.data.nodes[idx];
   }
 
-  updateNodesBatch(updatesList) {
-    const map = new Map(updatesList.map(u => [u.id, u]));
+  updateNodesBatch(updatesList) {    const map = new Map(updatesList.map(u => [u.id, u]));
     for (let i = 0; i < this.data.nodes.length; i++) {
       const u = map.get(this.data.nodes[i].id);
       if (u) {

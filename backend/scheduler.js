@@ -1,17 +1,17 @@
 const cron = require('node-cron');
 const db = require('./db');
 const { fetchSubscription } = require('./fetcher');
-const speedRunner = require('./speedRunner');
+const testBundle = require('./testBundle');
 
 class Scheduler {
   constructor() {
     this.cronTask = null;
-    this.speedTask = null;
+    this.testTask = null;
   }
 
   init() {
     this.restart();
-    this.restartSpeedTest();
+    this.restartScheduledTest();
   }
 
   restart() {
@@ -48,35 +48,49 @@ class Scheduler {
   }
 
   /**
-   * 定时网速测速：独立 cron，可在系统配置里开关与调整频率
+   * 定时测速（延迟 + 网速 捆绑）
+   * 支持：模式（两者/仅延迟/仅网速）、范围（整合订阅/仅可用/全部/自定义节点集合）
    */
-  restartSpeedTest() {
-    if (this.speedTask) {
-      this.speedTask.stop();
-      this.speedTask = null;
+  restartScheduledTest() {
+    if (this.testTask) {
+      this.testTask.stop();
+      this.testTask = null;
     }
 
     const settings = db.getSettings();
-    if (!settings.speedTestEnabled) {
-      console.log('[Scheduler] 定时网速测速未开启（系统配置 → 网速测速）');
+    const enabled = settings.schedTestEnabled !== undefined
+      ? settings.schedTestEnabled
+      : settings.speedTestEnabled;
+
+    if (!enabled) {
+      console.log('[Scheduler] 定时测速未开启（系统配置 → 定时测速）');
       return;
     }
 
-    const cronExpr = settings.speedTestCron || '0 */6 * * *';
-    console.log(`[Scheduler] Starting bandwidth test cron job with schedule: ${cronExpr}`);
+    const cronExpr = settings.schedTestCron || settings.speedTestCron || '0 4 * * *';
+    const mode = settings.schedTestMode || 'both';
+    const scope = settings.schedTestScope || 'combined';
+    console.log(`[Scheduler] Starting scheduled test cron (${cronExpr}) mode=${mode} scope=${scope}`);
 
     try {
-      this.speedTask = cron.schedule(cronExpr, async () => {
+      this.testTask = cron.schedule(cronExpr, async () => {
         try {
-          console.log('[Scheduler] Triggering scheduled bandwidth test...');
-          speedRunner.startSpeedTest({ trigger: 'cron', scope: settings.speedTestScope });
+          const targets = testBundle.pickNodes({ scope });
+          console.log(`[Scheduler] Triggering scheduled ${mode} test on ${targets.length} node(s)...`);
+          testBundle.runBundle({ mode, scope, trigger: 'cron' });
         } catch (e) {
-          console.error('[Scheduler] Bandwidth test failed:', e.message);
+          console.error('[Scheduler] Scheduled test failed:', e.message);
+          db.addLog('error', `定时测速启动失败: ${e.message}`);
         }
       });
     } catch (e) {
-      console.error('[Scheduler] Invalid speed test cron expression:', cronExpr, e.message);
+      console.error('[Scheduler] Invalid scheduled test cron expression:', cronExpr, e.message);
     }
+  }
+
+  // 兼容旧调用名
+  restartSpeedTest() {
+    this.restartScheduledTest();
   }
 }
 

@@ -15,6 +15,7 @@ const fetcher = require('./fetcher');
 const coreManager = require('./coreManager');
 const fofaManager = require('./fofaManager');
 const speedRunner = require('./speedRunner');
+const testBundle = require('./testBundle');
 const { fetchSubscription, fetchAllSubscriptions } = fetcher;
 const scheduler = require('./scheduler');
 
@@ -39,6 +40,7 @@ function broadcast(type, payload) {
 }
 fetcher.setBroadcast(broadcast);
 speedRunner.setBroadcast(broadcast);
+testBundle.setBroadcast(broadcast);
 
 function getPublicSettings() {
   const { fofaApiKey, ...safeSettings } = db.getSettings();
@@ -192,7 +194,7 @@ app.post('/api/settings', authMiddleware, (req, res) => {
   const { fofaApiKey, fofaEmail, ...safeUpdates } = req.body || {};
   db.updateSettings(safeUpdates);
   scheduler.restart();
-  scheduler.restartSpeedTest();
+  scheduler.restartScheduledTest();
   res.json(getPublicSettings());
 });
 
@@ -607,6 +609,26 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
     broadcast('test_error', { taskId, subId, error: err.message });
     db.addLog('error', `测速异常: ${err.message}`);
   }
+});
+
+// 延迟 + 网速 捆绑测速（先延迟筛存活，再对存活节点测真实带宽）
+app.post('/api/nodes/test-bundle', authMiddleware, (req, res) => {
+  const { ids, subId, scope, mode, maxRetries } = req.body || {};
+  try {
+    const job = testBundle.runBundle({ ids, subId, scope, mode, maxRetries, trigger: 'manual' });
+    res.json(job);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// 清理测速结果（延迟 / 网速，可指定节点或全量）
+app.post('/api/nodes/clear-results', authMiddleware, (req, res) => {
+  const { ids, types } = req.body || {};
+  const result = db.clearTestResults({ ids, types });
+  broadcast('nodes_cleared', result);
+  db.addLog('info', `清理测速结果：${result.count} 个节点，类型 ${result.types.join('+') || '无'}`);
+  res.json(result);
 });
 
 // 节点真实带宽（网速）测速：通过每个节点实际下载文件，统计稳态吞吐 (Mbps)

@@ -168,42 +168,9 @@
         </div>
 
         <div class="card-body form-body">
-          <div class="setting-toggle-row">
-            <div class="setting-toggle-copy">
-              <span class="setting-toggle-title">开启定时网速测速</span>
-              <span class="hint">开启后按下方 Cron 表达式自动为节点测速，结果写入「节点池与测速」的「网速」列</span>
-            </div>
-            <label class="switch" title="定时网速测速">
-              <input type="checkbox" v-model="settings.speedTestEnabled" />
-              <span class="slider round"></span>
-            </label>
+          <div class="hint-block">
+            定时执行请到下方「定时测速（延迟 + 网速）」卡片配置；这里只影响网速测速本身的参数。
           </div>
-
-          <div class="form-row" v-if="settings.speedTestEnabled">
-            <div class="form-group col-6">
-              <label>测速 Crontab 表达式</label>
-              <input v-model="settings.speedTestCron" type="text" placeholder="0 4 * * *" />
-              <span class="hint">默认每天凌晨 4 点（<code>0 4 * * *</code>）</span>
-            </div>
-            <div class="form-group col-6">
-              <label>测速范围</label>
-              <select v-model="settings.speedTestScope">
-                <option value="alive">仅可用节点（有延迟数据的）</option>
-                <option value="combined">仅整合订阅内的节点</option>
-                <option value="all">全部节点</option>
-              </select>
-              <span class="hint">节点多时建议只测「可用节点」或「整合订阅内」，避免占用带宽</span>
-            </div>
-            <div class="quick-cron-tags">
-              <span class="cron-tag" @click="settings.speedTestCron = '0 */2 * * *'">每 2 小时</span>
-              <span class="cron-tag" @click="settings.speedTestCron = '0 */6 * * *'">每 6 小时</span>
-              <span class="cron-tag" @click="settings.speedTestCron = '0 4 * * *'">每天凌晨4点</span>
-              <span class="cron-tag" @click="settings.speedTestCron = '0 */12 * * *'">每 12 小时</span>
-              <span class="cron-tag" @click="settings.speedTestCron = '0 9,21 * * *'">每天早晚各一次</span>
-            </div>
-          </div>
-
-          <div class="settings-divider"></div>
 
           <div class="form-group">
             <label>测速下载地址</label>
@@ -223,6 +190,104 @@
               <span class="hint">带宽共享，建议 1~3。并发越高单节点读数越低</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Scheduled combined test (delay + speed) -->
+      <div class="card glass full-width-card">
+        <div class="card-header">
+          <div class="card-title">
+            <Clock class="text-primary" :size="18" />
+            <span>定时测速（延迟 + 网速 捆绑）</span>
+          </div>
+          <span class="hint">一条 Cron 同时管延迟和网速：先测延迟筛出存活节点，再对存活节点测真实带宽。</span>
+        </div>
+
+        <div class="card-body form-body">
+          <div class="setting-toggle-row">
+            <div class="setting-toggle-copy">
+              <span class="setting-toggle-title">开启定时测速任务</span>
+              <span class="hint">按下方 Cron 自动执行，进度与结果实时推送到所有已打开的面板气泡</span>
+            </div>
+            <label class="switch" title="定时测速任务">
+              <input type="checkbox" v-model="settings.schedTestEnabled" />
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <template v-if="settings.schedTestEnabled">
+            <div class="form-row">
+              <div class="form-group col-6">
+                <label>Crontab 表达式</label>
+                <input v-model="settings.schedTestCron" type="text" placeholder="0 4 * * *" />
+                <span class="hint">默认每天凌晨 4 点（<code>0 4 * * *</code>）</span>
+              </div>
+              <div class="form-group col-6">
+                <label>测试模式</label>
+                <select v-model="settings.schedTestMode">
+                  <option value="both">延迟 + 网速（捆绑，推荐）</option>
+                  <option value="delay">仅延迟（快，几乎不耗流量）</option>
+                  <option value="speed">仅网速（不测延迟）</option>
+                </select>
+                <span class="hint">捆绑模式下，网速阶段只测本轮延迟存活的节点</span>
+              </div>
+            </div>
+
+            <div class="quick-cron-tags">
+              <span class="cron-tag" @click="settings.schedTestCron = '0 */2 * * *'">每 2 小时</span>
+              <span class="cron-tag" @click="settings.schedTestCron = '0 */6 * * *'">每 6 小时</span>
+              <span class="cron-tag" @click="settings.schedTestCron = '0 4 * * *'">每天凌晨4点</span>
+              <span class="cron-tag" @click="settings.schedTestCron = '0 */12 * * *'">每 12 小时</span>
+              <span class="cron-tag" @click="settings.schedTestCron = '0 9,21 * * *'">每天早晚各一次</span>
+            </div>
+
+            <div class="settings-divider"></div>
+
+            <div class="form-row">
+              <div class="form-group col-6">
+                <label>测试范围</label>
+                <select v-model="settings.schedTestScope">
+                  <option value="combined">仅整合订阅内的节点</option>
+                  <option value="alive">仅可用节点（有延迟数据的）</option>
+                  <option value="all">全部节点</option>
+                  <option value="custom">自定义指定节点</option>
+                </select>
+                <span class="hint">{{ scopeHint }}</span>
+              </div>
+              <div class="form-group col-6" v-if="settings.schedTestMode !== 'delay'">
+                <label class="checkbox-label" style="margin-top: 26px;">
+                  <input type="checkbox" v-model="settings.schedTestSpeedAliveOnly" />
+                  <span>网速阶段只测本轮存活节点</span>
+                </label>
+                <span class="hint">关掉后即使延迟失败也会尝试下载（更慢，一般不用）</span>
+              </div>
+            </div>
+
+            <!-- 自定义节点多选 -->
+            <div v-if="settings.schedTestScope === 'custom'" class="custom-node-picker">
+              <div class="picker-toolbar">
+                <input v-model="nodePickerKeyword" type="text" placeholder="搜索节点名称 / 服务器..." class="picker-search" />
+                <button type="button" class="btn btn-secondary btn-sm" @click="selectAllPickerNodes">
+                  全选{{ nodePickerKeyword ? '(筛选)' : '' }}
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" @click="settings.schedTestNodeIds = []">
+                  清空
+                </button>
+                <span class="picker-count">已选 {{ (settings.schedTestNodeIds || []).length }} / {{ pickerNodes.length }}</span>
+              </div>
+              <div class="picker-list">
+                <label v-for="n in pickerNodes" :key="n.id" class="picker-item">
+                  <input type="checkbox" :value="n.id" v-model="settings.schedTestNodeIds" />
+                  <span class="picker-name">{{ n.name }}</span>
+                  <span class="picker-meta">
+                    <span :class="n.delay > 0 ? 'text-success' : 'text-dim'">{{ n.delay > 0 ? n.delay + ' ms' : '未测' }}</span>
+                    <span v-if="n.speedStatus === 'ok'" class="text-primary">{{ n.speed }} Mbps</span>
+                  </span>
+                </label>
+                <div v-if="pickerNodes.length === 0" class="picker-empty">没有匹配的节点</div>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -403,8 +468,52 @@ const settings = reactive({
   speedTestScope: 'combined',
   speedTestUrl: 'https://speed.cloudflare.com/__down?bytes=31457280',
   speedTestDurationMs: 6000,
-  speedTestConcurrency: 1
+  speedTestConcurrency: 1,
+  // 定时测速（延迟 + 网速 捆绑）
+  schedTestEnabled: false,
+  schedTestCron: '0 4 * * *',
+  schedTestMode: 'both',
+  schedTestScope: 'combined',
+  schedTestNodeIds: [],
+  schedTestRetries: 3,
+  schedTestSpeedAliveOnly: true
 });
+
+// 自定义节点选择器
+const nodes = ref([]);
+const nodePickerKeyword = ref('');
+
+const pickerNodes = computed(() => {
+  const kw = nodePickerKeyword.value.trim().toLowerCase();
+  if (!kw) return nodes.value;
+  return nodes.value.filter(n =>
+    (n.name || '').toLowerCase().includes(kw) || (n.server || '').toLowerCase().includes(kw)
+  );
+});
+
+const selectAllPickerNodes = () => {
+  const set = new Set(settings.schedTestNodeIds || []);
+  pickerNodes.value.forEach(n => set.add(n.id));
+  settings.schedTestNodeIds = Array.from(set);
+};
+
+const scopeHint = computed(() => {
+  const total = nodes.value.length;
+  const alive = nodes.value.filter(n => n.delay > 0).length;
+  const combined = nodes.value.filter(n => n.inCombinedSub).length;
+  switch (settings.schedTestScope) {
+    case 'all': return `当前共 ${total} 个节点，全部参与`;
+    case 'alive': return `当前 ${alive} 个节点延迟正常，只测这些`;
+    case 'custom': return `从下方列表勾选，已选 ${(settings.schedTestNodeIds || []).length} 个`;
+    default: return `当前 ${combined} 个节点在整合订阅内，只测这些`;
+  }
+});
+
+const fetchNodes = async () => {
+  try {
+    nodes.value = await api.get('/nodes');
+  } catch (e) {}
+};
 
 const saving = ref(false);
 const exporting = ref(false);
@@ -617,6 +726,7 @@ const updatePassword = async () => {
 onMounted(() => {
   fetchSettings();
   fetchCoreInfo();
+  fetchNodes();
 });
 </script>
 
@@ -1151,5 +1261,94 @@ onMounted(() => {
     flex: 1;
     width: 100%;
   }
+}
+
+/* ---- 定时测速：自定义节点选择器 ---- */
+.hint-block {
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-card-subtle);
+  border-left: 3px solid var(--primary);
+  padding: 10px 12px;
+  border-radius: 8px;
+  line-height: 1.6;
+}
+
+.custom-node-picker {
+  margin-top: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--bg-card-subtle);
+}
+
+.picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.picker-search {
+  flex: 1;
+  min-width: 180px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-main);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.picker-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.picker-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.picker-item:hover {
+  background: var(--bg-card-hover);
+}
+
+.picker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: none;
+}
+
+.picker-empty {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
 }
 </style>

@@ -28,6 +28,48 @@
           <span>{{ speedTesting ? '网速测速中...' : '测网速（当前筛选）' }}</span>
         </button>
 
+        <button
+          class="btn btn-secondary"
+          @click="startBundleTest"
+          :disabled="bundleBusy || filteredNodes.length === 0"
+          title="先跑延迟（3 次重试），再对存活节点跑真实网速；定时任务用的是同一套编排"
+        >
+          <Layers :size="16" />
+          <span>延迟 + 网速 一起测</span>
+        </button>
+
+        <div class="clear-menu-wrap">
+          <button
+            class="btn btn-secondary"
+            @click="showClearMenu = !showClearMenu"
+            :disabled="nodes.length === 0"
+            title="清理延迟 / 网速的测速结果"
+          >
+            <Eraser :size="16" />
+            <span>清理结果</span>
+            <ChevronDown :size="14" />
+          </button>
+          <div v-if="showClearMenu" class="clear-menu glass">
+            <div class="clear-menu-title">
+              {{ selectedIds.length > 0 ? `已选中 ${selectedIds.length} 个节点` : `当前筛选 ${filteredNodes.length} 个节点` }}
+            </div>
+            <button class="clear-menu-item" @click="doClearResults(['delay'])">
+              <Clock :size="13" /> 清理延迟结果
+            </button>
+            <button class="clear-menu-item" @click="doClearResults(['speed'])">
+              <Gauge :size="13" /> 清理网速结果
+            </button>
+            <button class="clear-menu-item" @click="doClearResults(['delay', 'speed'])">
+              <Layers :size="13" /> 清理延迟 + 网速
+            </button>
+            <div class="clear-menu-divider"></div>
+            <button class="clear-menu-item danger" @click="doClearResults(['delay', 'speed'], true)">
+              <Trash2 :size="13" /> 清理全部节点（含未筛选）
+            </button>
+          </div>
+          <div v-if="showClearMenu" class="clear-menu-backdrop" @click="showClearMenu = false"></div>
+        </div>
+
         <button class="btn btn-secondary" @click="deduplicateNodes">
           <Copy :size="16" />
           <span>节点去重</span>
@@ -161,8 +203,7 @@
                   <component :is="sortIcon(col.key)" :size="13" class="sort-icon" />
                 </span>
               </th>
-              <th width="90" class="th-actions">操作</th>
-            </tr>
+              <th width="145" class="th-actions">操作</th>            </tr>
           </thead>
           <tbody>
             <tr
@@ -252,12 +293,24 @@
                 <div class="table-actions">
                   <button
                     class="action-btn"
-                    title="单独测速 (超时自动重试3次)"
+                    title="单独测延迟 (超时自动重试3次)"
                     @click="testSingleNode(node)"
                     :disabled="testingNodeIds.has(node.id)"
                   >
                     <RefreshCw v-if="testingNodeIds.has(node.id)" :size="14" class="animate-spin text-primary" />
                     <Zap v-else :size="14" />
+                  </button>
+                  <button
+                    class="action-btn"
+                    title="单独测网速（真实下载带宽）"
+                    @click="speedTestSingleNode(node)"
+                    :disabled="speedTestingIds.has(node.id)"
+                  >
+                    <Loader2 v-if="speedTestingIds.has(node.id)" :size="14" class="animate-spin text-primary" />
+                    <Gauge v-else :size="14" />
+                  </button>
+                  <button class="action-btn" title="清空该节点的延迟与网速结果" @click="clearNodeResults(node)">
+                    <Eraser :size="14" />
                   </button>
                   <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
                     <Edit3 :size="14" />
@@ -378,6 +431,10 @@ import {
   ArrowDown,
   ArrowUpDown,
   Gauge,
+  Eraser,
+  ChevronDown,
+  Clock,
+  Layers,
   X
 } from 'lucide-vue-next';
 import api from '../api';
@@ -396,6 +453,9 @@ const loading = ref(false);
 const selectedIds = ref([]);
 const testingNodeIds = ref(new Set());
 const speedTesting = ref(false);
+const speedTestingIds = ref(new Set());
+const bundleBusy = ref(false);
+const showClearMenu = ref(false);
 
 const currentPage = ref(1);
 const pageSize = ref(30);
@@ -734,7 +794,90 @@ const speedTooltip = (node) => {
   if (node.speedStatus === 'failed') {
     return `测速失败：${node.speedError || '下载无数据'}\n时间：${node.speedTime ? new Date(node.speedTime).toLocaleString() : '-'}`;
   }
-  return '尚未测网速，点击「测网速（当前筛选）」开始';
+  return '尚未测网速，点击该行的仪表盘图标或工具栏「测网速」开始';
+};
+
+// 单节点网速测速
+const speedTestSingleNode = async (node) => {
+  if (speedTestingIds.value.has(node.id)) return;
+  speedTestingIds.value.add(node.id);
+  try {
+    await api.post('/nodes/speed-test', { ids: [node.id] });
+  } catch (e) {
+    speedTestingIds.value.delete(node.id);
+    alert('启动网速测速失败: ' + e.message);
+  }
+};
+
+// 延迟 + 网速 捆绑测速
+const startBundleTest = async () => {
+  if (bundleBusy.value || filteredNodes.value.length === 0) return;
+  bundleBusy.value = true;
+  try {
+    await api.post('/nodes/test-bundle', {
+      ids: sortedNodes.value.map(n => n.id),
+      mode: 'both'
+    });
+  } catch (e) {
+    alert('启动测速失败: ' + e.message);
+  } finally {
+    bundleBusy.value = false;
+  }
+};
+
+// 清理测速结果
+const doClearResults = async (types, useAll = false) => {
+  showClearMenu.value = false;
+  const label = types.includes('delay') && types.includes('speed') ? '延迟与网速' : (types.includes('delay') ? '延迟' : '网速');
+  const target = useAll
+    ? `全部 ${nodes.value.length} 个节点`
+    : (selectedIds.value.length > 0
+      ? `选中的 ${selectedIds.value.length} 个节点`
+      : `当前筛选的 ${filteredNodes.value.length} 个节点`);
+  if (!confirm(`确定清理 ${target} 的 ${label} 结果吗？`)) return;
+
+  const payload = { types };
+  if (!useAll) {
+    payload.ids = selectedIds.value.length > 0
+      ? [...selectedIds.value]
+      : sortedNodes.value.map(n => n.id);
+  }
+
+  try {
+    const res = await api.post('/nodes/clear-results', payload);
+    await fetchNodes();
+    emit('data-changed');
+    if (res && typeof res.count === 'number') {
+      console.log(`[clear] 已清理 ${res.count} 个节点的 ${label} 结果`);
+    }
+  } catch (e) {
+    alert('清理失败: ' + e.message);
+  }
+};
+
+const clearNodeResults = async (node) => {
+  if (!confirm(`清空「${node.name}」的延迟与网速结果？`)) return;
+  try {
+    await api.post('/nodes/clear-results', { ids: [node.id], types: ['delay', 'speed'] });
+    Object.assign(node, {
+      delay: 0,
+      status: 'untested',
+      lastTestTime: null,
+      speed: null,
+      speedMbps: 0,
+      speedBps: 0,
+      speedBytes: 0,
+      speedDurationMs: 0,
+      speedFirstByteMs: 0,
+      speedUrl: '',
+      speedStatus: 'untested',
+      speedError: '',
+      speedTime: null
+    });
+    emit('data-changed');
+  } catch (e) {
+    alert('清理失败: ' + e.message);
+  }
 };
 
 const toggleNodeCombined = async (node) => {
@@ -846,6 +989,7 @@ const updateNodeInPlace = (nodeResult) => {
     }
   }
   testingNodeIds.value.delete(nodeResult.id);
+  speedTestingIds.value.delete(nodeResult.id);
 };
 
 const updateNodesInPlace = (resultsList) => {
@@ -871,12 +1015,14 @@ const updateNodesInPlace = (resultsList) => {
         node.speedTime = res.speedTime;
       }
       testingNodeIds.value.delete(node.id);
+      speedTestingIds.value.delete(node.id);
     }
   }
 };
 
 const clearTestingStates = () => {
   testingNodeIds.value.clear();
+  speedTestingIds.value.clear();
 };
 
 onMounted(() => {
@@ -1042,6 +1188,77 @@ defineExpose({
 .sort-reset-btn:hover .sort-reset-x {
   opacity: 1;
   color: var(--danger, #ef4444);
+}
+
+/* ---- 清理结果下拉菜单 ---- */
+.clear-menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.clear-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 224px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clear-menu-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
+}
+
+.clear-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.clear-menu-item:hover {
+  background: var(--bg-card-hover);
+}
+
+.clear-menu-item.danger {
+  color: #dc2626;
+}
+
+[data-theme="dark"] .clear-menu-item.danger {
+  color: #f87171;
+}
+
+.clear-menu-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 2px;
+}
+
+.clear-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
 }
 
 /* ---- 网速（真实带宽）列 ---- */
