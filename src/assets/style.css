@@ -133,8 +133,10 @@ body {
   flex-direction: column;
 }
 
-/* Inputs & Form Elements */
-input, select, textarea {
+/* Inputs & Form Elements
+   注意：checkbox / radio 必须排除在 width:100% 之外，否则会被拉成整行宽，
+   在 flex 行里把旁边文字挤成 0 宽（自定义节点选择器节点名消失的根因）。 */
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
   background: var(--bg-input);
   border: 1px solid var(--border-color);
   color: var(--text-main);
@@ -145,6 +147,21 @@ input, select, textarea {
   outline: none;
   transition: all 0.2s ease;
   width: 100%;
+}
+
+/* 复选框 / 单选框：固定小方块，不参与拉伸；:where 保持低特异性，方便各页面覆盖 */
+input:where([type="checkbox"], [type="radio"]) {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  padding: 0;
+  margin: 0;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  transition: none;
+  vertical-align: middle;
 }
 
 input:focus, select:focus, textarea:focus {

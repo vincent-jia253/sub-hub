@@ -1044,7 +1044,12 @@ onMounted(() => {
 }
 
 .checkbox-label input {
-  width: auto;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--primary);
 }
 
 .quick-cron-tags {
@@ -1320,6 +1325,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 6px 8px;
   border-radius: 8px;
   cursor: pointer;
@@ -1330,8 +1336,18 @@ onMounted(() => {
   background: var(--bg-card-hover);
 }
 
+.picker-item input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
 .picker-name {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
