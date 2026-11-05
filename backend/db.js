@@ -532,6 +532,7 @@ class Database {
         n.speedStatus = 'untested';
         n.speedError = '';
         n.speedTime = null;
+        n.speedHistory = [];
       }
       count++;
     });
@@ -559,6 +560,14 @@ class Database {
         if (Object.prototype.hasOwnProperty.call(u, 'delay') && (u.delay > 0 || u.delay === -1)) {
           const hist = Array.isArray(n.delayHistory) ? n.delayHistory : [];
           next.delayHistory = [...hist, { t: now, d: u.delay }].slice(-30);
+        }
+        // 网速测速结果（ok 记 Mbps，失败记 -1）追加到 speedHistory，供卡片「网速总结」色块条使用
+        if (u.speedStatus === 'ok' || u.speedStatus === 'failed') {
+          const val = u.speedStatus === 'ok'
+            ? Number(u.speedMbps != null ? u.speedMbps : u.speed) || 0
+            : -1;
+          const sh = Array.isArray(n.speedHistory) ? n.speedHistory : [];
+          next.speedHistory = [...sh, { t: now, s: val }].slice(-30);
         }
         this.data.nodes[i] = next;
       }

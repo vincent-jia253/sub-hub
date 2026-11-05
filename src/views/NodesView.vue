@@ -214,6 +214,11 @@
             <span :class="['nc-delay-chip', getDelayClass(node.delay)]">
               {{ node.delay > 0 ? node.delay + ' ms' : (node.delay === -1 ? '超时' : '未测') }}
             </span>
+            <span
+              v-if="node.speedStatus === 'ok' && node.speedMbps > 0"
+              class="nc-speed-chip"
+              :title="`最新实测带宽 ${node.speedMbps} Mbps`"
+            >{{ node.speedMbps.toFixed(0) }}M</span>
           </div>
 
           <div class="nc-server" :title="`${node.server}:${node.port}`">
@@ -244,9 +249,28 @@
             </div>
           </div>
 
-          <div class="nc-speed" v-if="node.speedStatus === 'ok' && node.speedMbps > 0">
-            <Gauge :size="14" />
-            <span>{{ node.speedMbps.toFixed(2) }} Mbps</span>
+          <div class="nc-section">
+            <div class="nc-sec-head">
+              <span class="nc-sec-label">网速总结</span>
+              <span class="nc-sec-right">近 {{ speedHistoryOf(node).length || 0 }} 次</span>
+            </div>
+            <div class="history-bar">
+              <template v-if="speedHistoryOf(node).length">
+                <span
+                  v-for="(h, i) in speedHistoryOf(node)"
+                  :key="'s' + i"
+                  :class="['hist-seg', 'seg-' + speedSegClass(h.s)]"
+                  :title="`第 ${i + 1} 次 · ${new Date(h.t).toLocaleString()} — ${h.s > 0 ? h.s + ' Mbps' : '测速失败'}`"
+                ></span>
+              </template>
+              <template v-else>
+                <span v-for="i in 10" :key="'se' + i" class="hist-seg seg-empty"></span>
+              </template>
+            </div>
+            <div class="nc-sec-stats">
+              <span>平均 {{ avgSpeedOf(node) !== null ? avgSpeedOf(node) + ' Mbps' : '—' }}</span>
+              <span>峰值 {{ maxSpeedOf(node) !== null ? maxSpeedOf(node) + ' Mbps' : '—' }}</span>
+            </div>
           </div>
 
           <div class="nc-traffic" v-if="node.trafficTotal > 0">
@@ -649,6 +673,33 @@ const expireText = (node) => {
   const d = new Date(t);
   const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   return days <= 0 ? `${dateStr} 已到期` : `${dateStr}（剩 ${days} 天）`;
+};
+
+/* ---------------- 卡片：网速总结（带宽历史） ---------------- */
+const speedHistoryOf = (node) => {
+  const list = Array.isArray(node.speedHistory) ? node.speedHistory : [];
+  return list.slice(-HISTORY_LIMIT);
+};
+
+// 带宽分段：绿 ≥300Mbps / 黄 ≥150 / 橙 ≥50 / 红 <50 / 深红 失败
+const speedSegClass = (s) => {
+  if (s === -1) return 'sfail';
+  if (s >= 300) return 'sfast';
+  if (s >= 150) return 'smid';
+  if (s >= 50) return 'sslow';
+  return 'sbad';
+};
+
+const avgSpeedOf = (node) => {
+  const ok = speedHistoryOf(node).filter(h => h.s > 0);
+  if (!ok.length) return null;
+  return Math.round((ok.reduce((s, h) => s + h.s, 0) / ok.length) * 10) / 10;
+};
+
+const maxSpeedOf = (node) => {
+  const ok = speedHistoryOf(node).filter(h => h.s > 0);
+  if (!ok.length) return null;
+  return Math.max(...ok.map(h => h.s));
 };
 
 /* ---------------- 表头排序 ---------------- */
@@ -1068,7 +1119,8 @@ const clearNodeResults = async (node) => {
       speedUrl: '',
       speedStatus: 'untested',
       speedError: '',
-      speedTime: null
+      speedTime: null,
+      speedHistory: []
     });
     emit('data-changed');
   } catch (e) {
@@ -1203,6 +1255,14 @@ const updateNodeInPlace = (nodeResult) => {
       target.speedUrl = nodeResult.speedUrl;
       target.speedError = nodeResult.speedError;
       target.speedTime = nodeResult.speedTime;
+      // 实时同步网速历史（卡片色块条）
+      if (nodeResult.speedStatus === 'ok' || nodeResult.speedStatus === 'failed') {
+        const val = nodeResult.speedStatus === 'ok'
+          ? Number(nodeResult.speedMbps != null ? nodeResult.speedMbps : nodeResult.speed) || 0
+          : -1;
+        if (!Array.isArray(target.speedHistory)) target.speedHistory = [];
+        target.speedHistory = [...target.speedHistory, { t: Date.now(), s: val }].slice(-30);
+      }
     }
   }
   testingNodeIds.value.delete(nodeResult.id);
@@ -2024,6 +2084,13 @@ defineExpose({
 .hist-seg.seg-timeout { background: #7f1d1d; }
 .hist-seg.seg-empty { background: var(--border-color); opacity: 0.55; }
 
+/* 网速档位: 绿 ≥300M / 黄 ≥150M / 橙 ≥50M / 红 <50M / 深红 失败 */
+.hist-seg.seg-sfast { background: #10b981; }
+.hist-seg.seg-smid { background: #f59e0b; }
+.hist-seg.seg-sslow { background: #f97316; }
+.hist-seg.seg-sbad { background: #ef4444; }
+.hist-seg.seg-sfail { background: #7f1d1d; }
+
 .nc-sec-stats {
   display: flex;
   gap: 12px;
@@ -2038,6 +2105,16 @@ defineExpose({
   gap: 6px;
   font-size: 12.5px;
   font-weight: 600;
+  color: var(--primary);
+}
+
+.nc-speed-chip {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.13);
   color: var(--primary);
 }
 
