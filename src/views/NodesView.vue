@@ -96,6 +96,17 @@
           <option value="false">未在整合订阅中</option>
         </select>
 
+        <button
+          v-if="sortKey"
+          class="btn btn-secondary btn-sm sort-reset-btn"
+          :title="'清除排序，恢复服务端返回的原始顺序'"
+          @click="clearSort"
+        >
+          <ArrowUpDown :size="14" />
+          <span>{{ activeSortLabel }}</span>
+          <X :size="13" class="sort-reset-x" />
+        </button>
+
         <button class="btn btn-secondary btn-sm" @click="fetchNodes">
           <RefreshCw :size="14" />
           <span>刷新</span>
@@ -126,12 +137,20 @@
                   @change="toggleSelectAll"
                 />
               </th>
-              <th>节点名称</th>
-              <th width="85">协议</th>
-              <th width="190">服务器 : 端口</th>
-              <th width="95">网络 / 伪装</th>
-              <th width="115">整合订阅</th>
-              <th width="110">延迟</th>
+              <th
+                v-for="col in sortableColumns"
+                :key="col.key"
+                :width="col.width || undefined"
+                :class="['th-sortable', { 'th-sorted': sortKey === col.key }]"
+                :aria-sort="sortAria(col.key)"
+                :title="`${col.label} — 点击切换：升序 / 降序 / 取消排序`"
+                @click="toggleSort(col.key)"
+              >
+                <span class="th-inner">
+                  <span>{{ col.label }}</span>
+                  <component :is="sortIcon(col.key)" :size="13" class="sort-icon" />
+                </span>
+              </th>
               <th width="90" class="th-actions">操作</th>
             </tr>
           </thead>
@@ -329,7 +348,11 @@ import {
   Radio,
   Loader2,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  X
 } from 'lucide-vue-next';
 import api from '../api';
 
@@ -349,6 +372,137 @@ const testingNodeIds = ref(new Set());
 
 const currentPage = ref(1);
 const pageSize = ref(30);
+
+/* ---------------- 表头排序 ---------------- */
+const SORT_STORAGE_KEY = 'sub_nodes_sort';
+
+// 可排序列定义（顺序即表头顺序）
+const sortableColumns = [
+  { key: 'name', label: '节点名称', width: '' },
+  { key: 'type', label: '协议', width: '85' },
+  { key: 'server', label: '服务器 : 端口', width: '190' },
+  { key: 'network', label: '网络 / 伪装', width: '95' },
+  { key: 'inCombinedSub', label: '整合订阅', width: '115' },
+  { key: 'delay', label: '延迟', width: '110' }
+];
+const SORT_KEYS = sortableColumns.map(c => c.key);
+
+// 每列的"第一次点击"方向：整合订阅默认降序（整合中在前），其余升序
+const SORT_FIRST_DIR = {
+  name: 'asc',
+  type: 'asc',
+  server: 'asc',
+  network: 'asc',
+  inCombinedSub: 'desc',
+  delay: 'asc'
+};
+
+const sortKey = ref('');
+const sortDir = ref('asc');
+
+// 恢复上次排序
+try {
+  const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) || 'null');
+  if (saved && SORT_KEYS.includes(saved.key)) {
+    sortKey.value = saved.key;
+    sortDir.value = saved.dir === 'desc' ? 'desc' : 'asc';
+  }
+} catch (e) {}
+
+const clearSort = () => {
+  sortKey.value = '';
+  sortDir.value = 'asc';
+  currentPage.value = 1;
+};
+
+const toggleSort = (key) => {
+  const first = SORT_FIRST_DIR[key] || 'asc';
+  if (sortKey.value !== key) {
+    sortKey.value = key;
+    sortDir.value = first;
+  } else if (sortDir.value === first) {
+    sortDir.value = first === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortKey.value = '';
+    sortDir.value = 'asc';
+  }
+  currentPage.value = 1;
+};
+
+const sortAria = (key) => {
+  if (sortKey.value !== key) return 'none';
+  return sortDir.value === 'asc' ? 'ascending' : 'descending';
+};
+
+const sortIcon = (key) => {
+  if (sortKey.value !== key) return ArrowUpDown;
+  return sortDir.value === 'asc' ? ArrowUp : ArrowDown;
+};
+
+const activeSortLabel = computed(() => {
+  const col = sortableColumns.find(c => c.key === sortKey.value);
+  if (!col) return '';
+  return `${col.label} ${sortDir.value === 'asc' ? '升序' : '降序'}`;
+});
+
+watch([sortKey, sortDir], ([k, d]) => {
+  try {
+    if (!k) localStorage.removeItem(SORT_STORAGE_KEY);
+    else localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: k, dir: d }));
+  } catch (e) {}
+});
+
+// 中文/数字友好的比较器
+const nameCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+
+const ipv4ToNumber = (host) => {
+  if (!host || !/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+  const parts = host.split('.').map(Number);
+  if (parts.some(p => p > 255)) return null;
+  return parts.reduce((acc, p) => acc * 256 + p, 0);
+};
+
+const netKey = (n) => `${(n.network || 'tcp').toLowerCase()} ${n.tls ? '1' : '0'}`;
+
+// 延迟排序分组：0=有有效延迟，1=超时/失败，2=未测速（永远排在最后）
+const delayRank = (n) => {
+  if (n.delay && n.delay > 0) return 0;
+  if (n.delay === -1 || n.status === 'failed') return 1;
+  return 2;
+};
+
+const compareBy = (key) => (a, b) => {
+  switch (key) {
+    case 'name':
+      return nameCollator.compare(a.name || '', b.name || '');
+    case 'type':
+      return nameCollator.compare((a.type || '').toLowerCase(), (b.type || '').toLowerCase());
+    case 'server': {
+      const na = ipv4ToNumber(a.server);
+      const nb = ipv4ToNumber(b.server);
+      if (na !== null && nb !== null) return na - nb;
+      return nameCollator.compare(a.server || '', b.server || '');
+    }
+    case 'network':
+      return nameCollator.compare(netKey(a), netKey(b));
+    case 'inCombinedSub': {
+      const va = a.inCombinedSub ? 1 : 0;
+      const vb = b.inCombinedSub ? 1 : 0;
+      if (va !== vb) return va - vb;
+      return nameCollator.compare(a.name || '', b.name || '');
+    }
+    case 'delay': {
+      const ra = delayRank(a);
+      const rb = delayRank(b);
+      if (ra !== rb) return ra - rb;
+      if (ra === 0) return a.delay - b.delay;
+      return nameCollator.compare(a.name || '', b.name || '');
+    }
+    default:
+      return 0;
+  }
+};
+/* ---------------- /表头排序 ---------------- */
 
 const filters = reactive({
   keyword: '',
@@ -421,11 +575,41 @@ const filteredNodes = computed(() => {
   return list;
 });
 
+// 在筛选结果上应用排序（排序只影响展示顺序，不改动后端数据）
+const sortedNodes = computed(() => {
+  const list = filteredNodes.value;
+  if (!sortKey.value) return list;
+
+  const cmp = compareBy(sortKey.value);
+  const dir = sortDir.value === 'desc' ? -1 : 1;
+  const arr = list.slice();
+
+  if (sortKey.value === 'delay') {
+    // 延迟列特殊处理：无有效延迟的节点永远排在末尾，不随升降序翻转
+    arr.sort((a, b) => {
+      const ra = delayRank(a);
+      const rb = delayRank(b);
+      if (ra !== rb) return ra - rb;
+      if (ra === 0) return (a.delay - b.delay) * dir;
+      return nameCollator.compare(a.name || '', b.name || '');
+    });
+    return arr;
+  }
+
+  arr.sort((a, b) => cmp(a, b) * dir);
+  return arr;
+});
+
 const totalPages = computed(() => Math.ceil(filteredNodes.value.length / pageSize.value) || 1);
 
 const pagedNodes = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value;
-  return filteredNodes.value.slice(start, start + pageSize.value);
+  return sortedNodes.value.slice(start, start + pageSize.value);
+});
+
+// 筛选条件变化时回到第一页，避免停留在被筛空的页码
+watch(filters, () => {
+  currentPage.value = 1;
 });
 
 const isAllSelected = computed(() => {
@@ -451,7 +635,8 @@ const getDelayClass = (delay) => {
 };
 
 const startSpeedTest = () => {
-  const targetIds = filteredNodes.value.map(n => n.id);
+  // 按当前展示顺序测速
+  const targetIds = sortedNodes.value.map(n => n.id);
   emit('start-test', targetIds);
 };
 
@@ -681,6 +866,62 @@ defineExpose({
   font-weight: 600;
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
+}
+
+/* ---- 可排序表头 ---- */
+.nodes-table th.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nodes-table th.th-sortable:hover {
+  color: var(--text-main);
+  background: var(--bg-table-hover);
+}
+
+.nodes-table th.th-sortable:active {
+  background: var(--primary-light);
+}
+
+.nodes-table th .th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+}
+
+.nodes-table th .sort-icon {
+  flex: none;
+  opacity: 0.4;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.nodes-table th.th-sortable:hover .sort-icon {
+  opacity: 0.8;
+}
+
+.nodes-table th.th-sorted {
+  color: var(--primary);
+}
+
+.nodes-table th.th-sorted .sort-icon {
+  opacity: 1;
+}
+
+/* 工具栏里的排序状态小标签 */
+.sort-reset-btn {
+  gap: 6px;
+}
+
+.sort-reset-btn .sort-reset-x {
+  opacity: 0.55;
+  margin-left: 2px;
+}
+
+.sort-reset-btn:hover .sort-reset-x {
+  opacity: 1;
+  color: var(--danger, #ef4444);
 }
 
 .nodes-table td {
