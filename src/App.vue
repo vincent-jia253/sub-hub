@@ -361,6 +361,17 @@ const applyTheme = (theme) => {
   }
 };
 
+// 兼容上一版的 hash 链接（/#nodes → /nodes），老书签不会一下失效
+const migrateLegacyHash = () => {
+  const raw = (window.location.hash || '').replace(/^#\/?/, '');
+  if (!raw) return false;
+  const [tabPart, queryPart] = raw.split('?');
+  if (!TABS.includes(tabPart)) return false;
+  const sub = new URLSearchParams(queryPart || '').get('sub') || '';
+  window.history.replaceState(null, '', buildPath(tabPart, sub));
+  return true;
+};
+
 const initialRoute = parsePath();
 const currentTab = ref(initialRoute.tab);
 const selectedSubFilter = ref(initialRoute.sub);
@@ -695,7 +706,12 @@ const setupWebSocket = () => {
 
 onMounted(() => {
   applyTheme(currentTheme.value);
-  // 无 hash（或非法 hash）时补一条规范地址，避免刷新后总是回首页
+  if (migrateLegacyHash()) {
+    const r = parsePath();
+    currentTab.value = r.tab;
+    selectedSubFilter.value = r.sub;
+  }
+  // 非法/空路径规范化成 /nodes 这种干净地址
   syncPath(currentTab.value, selectedSubFilter.value, true);
   window.addEventListener('popstate', handleLocationChange);
   if (isLoggedIn.value) {
