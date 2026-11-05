@@ -720,11 +720,17 @@ app.post('/api/system/config/import', authMiddleware, (req, res) => {
 const DIST_PATH = path.join(__dirname, '..', 'dist');
 if (fs.existsSync(DIST_PATH)) {
   app.use(express.static(DIST_PATH));
+  // SPA history fallback：/nodes、/settings 这类前端路由直接返回 index.html
   app.use((req, res, next) => {
-    if (req.method === 'GET' && !req.path.startsWith('/api') && !req.path.startsWith('/sub')) {
-      return res.sendFile(path.join(DIST_PATH, 'index.html'));
-    }
-    next();
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (req.path.startsWith('/api') || req.path.startsWith('/sub')) return next();
+    // 带扩展名的当成静态资源，缺失就让它 404，别把 HTML 当 JS/CSS 返回
+    if (path.extname(req.path)) return next();
+    const accept = req.headers.accept || '';
+    // 只对「想要 HTML」的请求兜底；curl 默认 */*、浏览器默认带 text/html
+    const wantsHtml = !accept || accept.includes('text/html') || accept.includes('*/*');
+    if (!wantsHtml) return next();
+    return res.sendFile(path.join(DIST_PATH, 'index.html'));
   });
 }
 

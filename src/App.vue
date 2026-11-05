@@ -301,48 +301,46 @@ const closeMobileMenu = () => {
   isMobileMenuOpen.value = false;
 };
 
-/* ---------- 路由同步（hash）：刷新 / 分享链接 / 前进后退都停在当前页 ---------- */
+/* ---------- 路由同步（history 路径）：刷新 / 分享 / 前进后退都停在当前页 ---------- */
 const TABS = ['dashboard', 'subscriptions', 'fofa', 'nodes', 'profiles', 'settings'];
+// 支持部署在子路径（vite base），根路径时 BASE 为空串
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
 
-const parseHash = () => {
-  const raw = (window.location.hash || '').replace(/^#\/?/, '');
-  const [tabPart, queryPart] = raw.split('?');
-  const tab = TABS.includes(tabPart) ? tabPart : 'dashboard';
-  const sub = new URLSearchParams(queryPart || '').get('sub') || '';
-  return { tab, sub };
+const parsePath = () => {
+  let p = window.location.pathname || '/';
+  if (BASE && (p === BASE || p.startsWith(BASE + '/'))) p = p.slice(BASE.length) || '/';
+  const seg = p.replace(/^\/+/, '').split('/')[0];
+  const tab = TABS.includes(seg) ? seg : 'dashboard';
+  const sub = new URLSearchParams(window.location.search).get('sub') || '';
+  return { tab, sub: tab === 'nodes' ? sub : '' };
 };
 
-const buildHash = (tab, sub) => `#${tab}${tab === 'nodes' && sub ? '?sub=' + encodeURIComponent(sub) : ''}`;
-
-const syncHash = (tab = currentTab.value, sub = selectedSubFilter.value, replace = false) => {
-  const target = buildHash(tab, sub);
-  if (replace) {
-    // 用绝对路径重写，顺手清掉 ?nocache= 之类的临时查询串，地址栏保持 https://host/#nodes 这种干净形态
-    if (window.location.hash !== target || window.location.search) {
-      window.history.replaceState(null, '', window.location.pathname + target);
-    }
-    return;
-  }
-  if (window.location.hash === target) return;
-  window.location.hash = target;
+const buildPath = (tab, sub) => {
+  // 仪表盘用根路径，地址栏最干净
+  if (tab === 'dashboard') return `${BASE}/`;
+  return `${BASE}/${tab}${tab === 'nodes' && sub ? '?sub=' + encodeURIComponent(sub) : ''}`;
 };
 
-const handleHashChange = () => {
-  const { tab, sub } = parseHash();
+const syncPath = (tab = currentTab.value, sub = selectedSubFilter.value, replace = false) => {
+  const target = buildPath(tab, sub);
+  if (window.location.pathname + window.location.search === target) return;
+  // replace 顺手清掉 ?nocache= 之类的临时查询串；push 保留历史记录便于后退
+  if (replace) window.history.replaceState(null, '', target);
+  else window.history.pushState(null, '', target);
+};
+
+const handleLocationChange = () => {
+  const { tab, sub } = parsePath();
   if (tab !== currentTab.value) currentTab.value = tab;
-  if (tab === 'nodes') {
-    if (sub !== selectedSubFilter.value) selectedSubFilter.value = sub;
-  } else if (selectedSubFilter.value) {
-    selectedSubFilter.value = '';
-  }
-  // 非法/空 hash 规范化成合法地址（#foobar → #dashboard）
-  syncHash(currentTab.value, tab === 'nodes' ? selectedSubFilter.value : '', true);
+  if (sub !== selectedSubFilter.value) selectedSubFilter.value = sub;
+  // 非法/空路径规范化（/foobar → /dashboard，多余参数清理）
+  syncPath(tab, sub, true);
 };
 
 const switchTab = (tab) => {
   currentTab.value = tab;
   if (tab !== 'nodes') selectedSubFilter.value = '';
-  syncHash(tab, tab === 'nodes' ? selectedSubFilter.value : '');
+  syncPath(tab, tab === 'nodes' ? selectedSubFilter.value : '');
   closeMobileMenu();
 };
 
@@ -363,7 +361,7 @@ const applyTheme = (theme) => {
   }
 };
 
-const initialRoute = parseHash();
+const initialRoute = parsePath();
 const currentTab = ref(initialRoute.tab);
 const selectedSubFilter = ref(initialRoute.sub);
 const nodesViewRef = ref(null);
@@ -471,20 +469,20 @@ const refreshAllData = async () => {
 const handleViewSubNodes = (subId) => {
   selectedSubFilter.value = subId;
   currentTab.value = 'nodes';
-  syncHash('nodes', subId);
+  syncPath('nodes', subId);
 };
 
 const handleSubFilterChange = (subId) => {
   const v = subId || '';
   if (selectedSubFilter.value !== v) selectedSubFilter.value = v;
   // 筛选变化只刷新地址栏，不往历史栈里塞记录（后退仍按页面级走）
-  if (currentTab.value === 'nodes') syncHash('nodes', v, true);
+  if (currentTab.value === 'nodes') syncPath('nodes', v, true);
 };
 
 const viewAllNodes = () => {
   selectedSubFilter.value = '';
   currentTab.value = 'nodes';
-  syncHash('nodes', '');
+  syncPath('nodes', '');
 };
 
 const viewAllNodesMobile = () => {
@@ -698,8 +696,8 @@ const setupWebSocket = () => {
 onMounted(() => {
   applyTheme(currentTheme.value);
   // 无 hash（或非法 hash）时补一条规范地址，避免刷新后总是回首页
-  syncHash(currentTab.value, selectedSubFilter.value, true);
-  window.addEventListener('hashchange', handleHashChange);
+  syncPath(currentTab.value, selectedSubFilter.value, true);
+  window.addEventListener('popstate', handleLocationChange);
   if (isLoggedIn.value) {
     refreshAllData();
     setupWebSocket();
