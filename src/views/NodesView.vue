@@ -231,11 +231,11 @@
                   v-for="(h, i) in delayHistoryOf(node)"
                   :key="i"
                   :class="['hist-seg', 'seg-' + delaySegClass(h.d)]"
-                  :title="`${new Date(h.t).toLocaleString()} — ${h.d > 0 ? h.d + ' ms' : '超时'}`"
+                  :title="`第 ${i + 1} 次 · ${new Date(h.t).toLocaleString()} — ${h.d > 0 ? h.d + ' ms' : '超时'}`"
                 ></span>
               </template>
               <template v-else>
-                <span v-for="i in 15" :key="'e' + i" class="hist-seg seg-empty"></span>
+                <span v-for="i in 10" :key="'e' + i" class="hist-seg seg-empty"></span>
               </template>
             </div>
             <div class="nc-sec-stats">
@@ -594,7 +594,7 @@ const setViewMode = (mode) => {
 };
 
 /* ---------------- 卡片：延迟总结与流量信息 ---------------- */
-const HISTORY_LIMIT = 15; // 色块条最多展示最近 15 次
+const HISTORY_LIMIT = 10; // 色块条固定展示最近 10 次（后端保留 30 条）
 
 const delayHistoryOf = (node) => {
   const list = Array.isArray(node.delayHistory) ? node.delayHistory : [];
@@ -2017,12 +2017,12 @@ defineExpose({
   min-width: 3px;
 }
 
-.hist-seg.fast { background: #10b981; }
-.hist-seg.mid { background: #f59e0b; }
-.hist-seg.slow { background: #f97316; }
-.hist-seg.bad { background: #ef4444; }
-.hist-seg.timeout { background: #7f1d1d; }
-.hist-seg.empty { background: var(--border-color); opacity: 0.55; }
+.hist-seg.seg-fast { background: #10b981; }
+.hist-seg.seg-mid { background: #f59e0b; }
+.hist-seg.seg-slow { background: #f97316; }
+.hist-seg.seg-bad { background: #ef4444; }
+.hist-seg.seg-timeout { background: #7f1d1d; }
+.hist-seg.seg-empty { background: var(--border-color); opacity: 0.55; }
 
 .nc-sec-stats {
   display: flex;
