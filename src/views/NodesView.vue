@@ -224,6 +224,10 @@
           <div class="nc-server" :title="`${node.server}:${node.port}`">
             {{ node.server }}:{{ node.port }} · {{ (node.network || 'tcp').toUpperCase() }}<template v-if="node.tls"> · TLS</template>
           </div>
+          <div class="nc-sub-src" v-if="getSubName(node.subId)">
+            <Layers :size="11" />
+            <span>{{ getSubName(node.subId) }}</span>
+          </div>
 
           <div class="nc-section">
             <div class="nc-sec-head">
@@ -2029,6 +2033,21 @@ defineExpose({
 .nc-server {
   font-size: 11.5px;
   color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-sub-src {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: -4px;
+}
+
+.nc-sub-src span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

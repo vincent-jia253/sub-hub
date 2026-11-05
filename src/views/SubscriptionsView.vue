@@ -245,6 +245,26 @@
             </label>
           </div>
 
+          <!-- 手动配额：机场不返回 subscription-userinfo 头时，手动填流量 / 到期 -->
+          <div class="quota-block">
+            <div class="quota-title">流量信息（可选）</div>
+            <span class="input-hint">机场响应头带流量信息时会自动填充并覆盖此处；自建节点 / 不返回流量的机场可手动填写，保存后立即应用到该订阅下所有节点</span>
+            <div class="quota-fields">
+              <div class="form-group">
+                <label>总流量 (GB，0 = 未知)</label>
+                <input v-model.number="form.quotaTotalGb" type="number" min="0" step="0.01" placeholder="例如 512" />
+              </div>
+              <div class="form-group">
+                <label>已用流量 (GB)</label>
+                <input v-model.number="form.quotaUsedGb" type="number" min="0" step="0.01" placeholder="例如 8" />
+              </div>
+              <div class="form-group">
+                <label>到期日期</label>
+                <input v-model="form.quotaExpireDate" type="date" />
+              </div>
+            </div>
+          </div>
+
           <!-- 编辑模式下展示：该订阅下的节点列表与一键测速 -->
           <div v-if="isEditing" class="sub-nodes-panel glass-sm">
             <div class="sub-nodes-panel-header">
@@ -433,7 +453,10 @@ const modalError = ref('');
 const form = reactive({
   name: '',
   url: '',
-  autoRefresh: true
+  autoRefresh: true,
+  quotaTotalGb: 0,
+  quotaUsedGb: 0,
+  quotaExpireDate: ''
 });
 
 const showRawModal = ref(false);
@@ -549,6 +572,11 @@ const openEditModal = (sub) => {
   form.name = sub.name;
   form.url = sub.url;
   form.autoRefresh = sub.autoRefresh !== false;
+  const GB = 1024 ** 3;
+  const q = sub.manualQuota;
+  form.quotaTotalGb = q && q.total ? Math.round((q.total / GB) * 100) / 100 : 0;
+  form.quotaUsedGb = q && q.used ? Math.round((q.used / GB) * 100) / 100 : 0;
+  form.quotaExpireDate = q && q.expire ? new Date(q.expire).toISOString().slice(0, 10) : '';
   modalError.value = '';
   subNodesTesting.value = false;
   showModal.value = true;
@@ -560,7 +588,12 @@ const submitSubForm = async () => {
   submitting.value = true;
   try {
     if (isEditing.value) {
-      await api.put(`/subscriptions/${editingId.value}`, form);
+      await api.put(`/subscriptions/${editingId.value}`, {
+        ...form,
+        quotaTotalGb: Number(form.quotaTotalGb) || 0,
+        quotaUsedGb: Number(form.quotaUsedGb) || 0,
+        quotaExpireDate: form.quotaExpireDate || ''
+      });
     } else {
       const res = await api.post('/subscriptions', form);
       if (res.skipped) {
@@ -1408,5 +1441,35 @@ input:checked + .slider:before {
     width: 100%;
     justify-content: flex-end;
   }
+}
+/* 手动配额块 */
+.quota-block {
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+}
+
+.quota-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--text-main);
+}
+
+.quota-fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.quota-fields .form-group {
+  flex: 1;
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .quota-fields { flex-direction: column; }
 }
 </style>

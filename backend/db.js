@@ -575,8 +575,37 @@ class Database {
     this.save();
   }
 
-  deleteNode(id) {
-    const idx = this.data.nodes.findIndex(n => n.id === id);
+  /**
+   * 把订阅的手动配额（manualQuota: {used,total,expire}）应用到该订阅下所有节点。
+   * 节点 trafficSource==='manual'（用户在节点编辑里手填）的不覆盖。
+   * manualQuota 为空时清除非 manual 节点的配额。
+   */
+  applySubscriptionQuota(subId) {
+    const sub = this.getSubscription(subId);
+    if (!sub) return 0;
+    const q = sub.manualQuota && Number(sub.manualQuota.total) > 0 ? sub.manualQuota : null;
+    let count = 0;
+    this.data.nodes.forEach(n => {
+      if (n.subId !== subId) return;
+      if (n.trafficSource === 'manual') return;
+      if (q) {
+        n.trafficUsed = Number(q.used) || 0;
+        n.trafficTotal = Number(q.total) || 0;
+        n.expireAt = Number(q.expire) || 0;
+        n.trafficSource = 'quota';
+      } else {
+        n.trafficUsed = 0;
+        n.trafficTotal = 0;
+        n.expireAt = 0;
+        n.trafficSource = '';
+      }
+      count++;
+    });
+    if (count > 0) this.save();
+    return count;
+  }
+
+  deleteNode(id) {    const idx = this.data.nodes.findIndex(n => n.id === id);
     if (idx === -1) return false;
     const subId = this.data.nodes[idx].subId;
     this.data.nodes.splice(idx, 1);

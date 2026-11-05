@@ -370,8 +370,22 @@ app.put('/api/subscriptions/:id', authMiddleware, async (req, res) => {
   if (updates.url) {
     updates.ip = await db.resolveSubscriptionIp(updates.url);
   }
+  // 手动配额（GB / 日期 → bytes / ms）；全空则清除
+  if (updates.quotaTotalGb !== undefined || updates.quotaUsedGb !== undefined || updates.quotaExpireDate !== undefined) {
+    const GB = 1024 ** 3;
+    const total = Math.max(0, Number(updates.quotaTotalGb) || 0) * GB;
+    const used = Math.max(0, Number(updates.quotaUsedGb) || 0) * GB;
+    const expire = updates.quotaExpireDate ? new Date(updates.quotaExpireDate + 'T00:00:00').getTime() : 0;
+    updates.manualQuota = total > 0 ? { used, total, expire } : null;
+    delete updates.quotaTotalGb;
+    delete updates.quotaUsedGb;
+    delete updates.quotaExpireDate;
+  }
   const updated = db.updateSubscription(req.params.id, updates);
   if (!updated) return res.status(404).json({ error: '订阅不存在' });
+  // 配额变化立即应用到该订阅下所有节点（不覆盖节点级手动数据）
+  const applied = db.applySubscriptionQuota(req.params.id);
+  if (applied > 0) broadcast('nodes_updated', { count: applied });
   res.json(updated);
 });
 

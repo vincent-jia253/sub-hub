@@ -109,6 +109,10 @@ async function fetchSubscription(subId) {
       existingMap.set(key, n);
     });
 
+    // 配额来源优先级：节点手动(manual) > 订阅响应头(subUserinfo) > 订阅手动配额(manualQuota)
+    const subRec = db.getSubscription(subId) || {};
+    const subManualQuota = subRec.manualQuota && Number(subRec.manualQuota.total) > 0 ? subRec.manualQuota : null;
+
     const mergedNodes = nodes.map(n => {
       const key = `${n.type}:${n.server}:${n.port}:${n.uuid || n.password || ''}`;
       const old = existingMap.get(key);
@@ -125,11 +129,18 @@ async function fetchSubscription(subId) {
           expireAt: old.expireAt || 0,
           trafficSource: old.trafficSource || ''
         };
-        if (subUserinfo && merged.trafficSource !== 'manual') {
-          merged.trafficUsed = subUserinfo.used;
-          merged.trafficTotal = subUserinfo.total;
-          merged.expireAt = subUserinfo.expire;
-          merged.trafficSource = 'sub';
+        if (merged.trafficSource !== 'manual') {
+          if (subUserinfo) {
+            merged.trafficUsed = subUserinfo.used;
+            merged.trafficTotal = subUserinfo.total;
+            merged.expireAt = subUserinfo.expire;
+            merged.trafficSource = 'sub';
+          } else if (subManualQuota) {
+            merged.trafficUsed = Number(subManualQuota.used) || 0;
+            merged.trafficTotal = Number(subManualQuota.total) || 0;
+            merged.expireAt = Number(subManualQuota.expire) || 0;
+            merged.trafficSource = 'quota';
+          }
         }
         return merged;
       }
@@ -139,6 +150,11 @@ async function fetchSubscription(subId) {
         fresh.trafficTotal = subUserinfo.total;
         fresh.expireAt = subUserinfo.expire;
         fresh.trafficSource = 'sub';
+      } else if (subManualQuota) {
+        fresh.trafficUsed = Number(subManualQuota.used) || 0;
+        fresh.trafficTotal = Number(subManualQuota.total) || 0;
+        fresh.expireAt = Number(subManualQuota.expire) || 0;
+        fresh.trafficSource = 'quota';
       }
       return fresh;
     });
