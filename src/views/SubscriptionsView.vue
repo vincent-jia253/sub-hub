@@ -245,8 +245,8 @@
             </label>
           </div>
 
-          <!-- 手动配额：机场不返回 subscription-userinfo 头时，手动填流量 / 到期 -->
-          <div class="quota-block">
+          <!-- 手动配额：机场不返回 subscription-userinfo 头时，手动填流量 / 到期（仅真订阅，manual:// 自建容器无意义） -->
+          <div class="quota-block" v-if="!form.url || !form.url.startsWith('manual://')">
             <div class="quota-title">流量信息（可选）</div>
             <span class="input-hint">机场响应头带流量信息时会自动填充并覆盖此处；自建节点 / 不返回流量的机场可手动填写，保存后立即应用到该订阅下所有节点</span>
             <div class="quota-fields">

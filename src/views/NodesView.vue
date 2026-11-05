@@ -224,9 +224,9 @@
           <div class="nc-server" :title="`${node.server}:${node.port}`">
             {{ node.server }}:{{ node.port }} · {{ (node.network || 'tcp').toUpperCase() }}<template v-if="node.tls"> · TLS</template>
           </div>
-          <div class="nc-sub-src" v-if="getSubName(node.subId)">
+          <div class="nc-sub-src" v-if="realSubOf(node)">
             <Layers :size="11" />
-            <span>{{ getSubName(node.subId) }}</span>
+            <span>{{ realSubOf(node).name }}</span>
           </div>
 
           <div class="nc-section">
@@ -680,6 +680,14 @@ const expireText = (node) => {
 };
 
 /* ---------------- 卡片：网速总结（带宽历史） ---------------- */
+
+// 卡片来源行只认「真订阅」（URL 非 manual:// 的）；自建节点容器不显示
+const realSubOf = (node) => {
+  const sub = subs.value.find(s => s.id === node.subId);
+  if (!sub || !sub.url || sub.url.startsWith('manual://')) return null;
+  return sub;
+};
+
 const speedHistoryOf = (node) => {
   const list = Array.isArray(node.speedHistory) ? node.speedHistory : [];
   return list.slice(-HISTORY_LIMIT);
