@@ -163,6 +163,7 @@
             :testProgress="latestTestProgress"
             @start-test="handleStartSpeedTest"
             @data-changed="fetchStats"
+            @sub-filter-change="handleSubFilterChange"
           />
 
           <ProfilesView
@@ -300,8 +301,48 @@ const closeMobileMenu = () => {
   isMobileMenuOpen.value = false;
 };
 
+/* ---------- 路由同步（hash）：刷新 / 分享链接 / 前进后退都停在当前页 ---------- */
+const TABS = ['dashboard', 'subscriptions', 'fofa', 'nodes', 'profiles', 'settings'];
+
+const parseHash = () => {
+  const raw = (window.location.hash || '').replace(/^#\/?/, '');
+  const [tabPart, queryPart] = raw.split('?');
+  const tab = TABS.includes(tabPart) ? tabPart : 'dashboard';
+  const sub = new URLSearchParams(queryPart || '').get('sub') || '';
+  return { tab, sub };
+};
+
+const buildHash = (tab, sub) => `#${tab}${tab === 'nodes' && sub ? '?sub=' + encodeURIComponent(sub) : ''}`;
+
+const syncHash = (tab = currentTab.value, sub = selectedSubFilter.value, replace = false) => {
+  const target = buildHash(tab, sub);
+  if (replace) {
+    // 用绝对路径重写，顺手清掉 ?nocache= 之类的临时查询串，地址栏保持 https://host/#nodes 这种干净形态
+    if (window.location.hash !== target || window.location.search) {
+      window.history.replaceState(null, '', window.location.pathname + target);
+    }
+    return;
+  }
+  if (window.location.hash === target) return;
+  window.location.hash = target;
+};
+
+const handleHashChange = () => {
+  const { tab, sub } = parseHash();
+  if (tab !== currentTab.value) currentTab.value = tab;
+  if (tab === 'nodes') {
+    if (sub !== selectedSubFilter.value) selectedSubFilter.value = sub;
+  } else if (selectedSubFilter.value) {
+    selectedSubFilter.value = '';
+  }
+  // 非法/空 hash 规范化成合法地址（#foobar → #dashboard）
+  syncHash(currentTab.value, tab === 'nodes' ? selectedSubFilter.value : '', true);
+};
+
 const switchTab = (tab) => {
   currentTab.value = tab;
+  if (tab !== 'nodes') selectedSubFilter.value = '';
+  syncHash(tab, tab === 'nodes' ? selectedSubFilter.value : '');
   closeMobileMenu();
 };
 
@@ -322,8 +363,9 @@ const applyTheme = (theme) => {
   }
 };
 
-const currentTab = ref('dashboard');
-const selectedSubFilter = ref('');
+const initialRoute = parseHash();
+const currentTab = ref(initialRoute.tab);
+const selectedSubFilter = ref(initialRoute.sub);
 const nodesViewRef = ref(null);
 const subsViewRef = ref(null);
 
@@ -429,11 +471,20 @@ const refreshAllData = async () => {
 const handleViewSubNodes = (subId) => {
   selectedSubFilter.value = subId;
   currentTab.value = 'nodes';
+  syncHash('nodes', subId);
+};
+
+const handleSubFilterChange = (subId) => {
+  const v = subId || '';
+  if (selectedSubFilter.value !== v) selectedSubFilter.value = v;
+  // 筛选变化只刷新地址栏，不往历史栈里塞记录（后退仍按页面级走）
+  if (currentTab.value === 'nodes') syncHash('nodes', v, true);
 };
 
 const viewAllNodes = () => {
   selectedSubFilter.value = '';
   currentTab.value = 'nodes';
+  syncHash('nodes', '');
 };
 
 const viewAllNodesMobile = () => {
@@ -646,6 +697,9 @@ const setupWebSocket = () => {
 
 onMounted(() => {
   applyTheme(currentTheme.value);
+  // 无 hash（或非法 hash）时补一条规范地址，避免刷新后总是回首页
+  syncHash(currentTab.value, selectedSubFilter.value, true);
+  window.addEventListener('hashchange', handleHashChange);
   if (isLoggedIn.value) {
     refreshAllData();
     setupWebSocket();

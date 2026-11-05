@@ -614,7 +614,7 @@ const props = defineProps({
   testProgress: { type: Object, default: () => ({ current: 0, total: 0 }) }
 });
 
-const emit = defineEmits(['start-test', 'data-changed']);
+const emit = defineEmits(['start-test', 'data-changed', 'sub-filter-change']);
 
 const nodes = ref([]);
 const subs = ref([]);
@@ -901,6 +901,11 @@ watch(() => props.initialSubId, (newVal) => {
   if (newVal !== undefined) {
     filters.subId = newVal;
   }
+});
+
+// 页面内切换订阅筛选时同步回地址栏（刷新/分享后保持同一筛选）
+watch(() => filters.subId, (val) => {
+  emit('sub-filter-change', val || '');
 });
 
 const fetchSubs = async () => {
