@@ -7,6 +7,26 @@ const tester = require('./tester');
 
 const DEFAULT_USER_AGENT = 'ClashMeta/1.19.31 (Clash.Meta; Linux x86_64)';
 
+/**
+ * 解析 subscription-userinfo 响应头
+ * 形如: upload=1234; download=2234; total=1073741824000; expire=1640995200
+ * 返回 { used, total, expire }（used = upload+download，单位字节；expire 为毫秒时间戳，0 = 未知）
+ */
+function parseSubscriptionUserinfo(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const kv = {};
+  raw.split(';').forEach(part => {
+    const idx = part.indexOf('=');
+    if (idx > 0) kv[part.slice(0, idx).trim().toLowerCase()] = part.slice(idx + 1).trim();
+  });
+  const num = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const total = num(kv['total']);
+  const used = num(kv['upload']) + num(kv['download']);
+  const expire = Math.round(num(kv['expire']) * 1000);
+  if (!total && !used && !expire) return null;
+  return { used, total, expire };
+}
+
 let broadcastFn = null;
 function setBroadcast(fn) {
   broadcastFn = fn;
@@ -68,6 +88,14 @@ async function fetchSubscription(subId) {
       throw new Error('订阅内容为空或返回格式不正确');
     }
 
+    // 解析机场流量信息（subscription-userinfo: upload=..; download=..; total=..; expire=..）
+    const subUserinfo = parseSubscriptionUserinfo(
+      response.headers && (response.headers['subscription-userinfo'] || response.headers['Subscription-Userinfo'])
+    );
+    if (subUserinfo) {
+      db.updateSubscription(subId, { userInfo: subUserinfo });
+    }
+
     const nodes = parseSubscriptionContent(rawData, yaml);
     if (!nodes || nodes.length === 0) {
       throw new Error('未能从订阅中识别出有效节点（请检查订阅链接或内容格式）');
@@ -85,18 +113,34 @@ async function fetchSubscription(subId) {
       const key = `${n.type}:${n.server}:${n.port}:${n.uuid || n.password || ''}`;
       const old = existingMap.get(key);
       if (old) {
-        return {
+        const merged = {
           ...n,
           delay: old.delay || 0,
           status: old.status || 'untested',
           inCombinedSub: Boolean(old.inCombinedSub),
-          lastTestTime: old.lastTestTime || null
+          lastTestTime: old.lastTestTime || null,
+          delayHistory: Array.isArray(old.delayHistory) ? old.delayHistory : [],
+          trafficUsed: old.trafficUsed || 0,
+          trafficTotal: old.trafficTotal || 0,
+          expireAt: old.expireAt || 0,
+          trafficSource: old.trafficSource || ''
         };
+        if (subUserinfo && merged.trafficSource !== 'manual') {
+          merged.trafficUsed = subUserinfo.used;
+          merged.trafficTotal = subUserinfo.total;
+          merged.expireAt = subUserinfo.expire;
+          merged.trafficSource = 'sub';
+        }
+        return merged;
       }
-      return {
-        ...n,
-        inCombinedSub: false
-      };
+      const fresh = { ...n, inCombinedSub: false, delayHistory: [] };
+      if (subUserinfo) {
+        fresh.trafficUsed = subUserinfo.used;
+        fresh.trafficTotal = subUserinfo.total;
+        fresh.expireAt = subUserinfo.expire;
+        fresh.trafficSource = 'sub';
+      }
+      return fresh;
     });
 
     db.setSubscriptionNodes(subId, mergedNodes);

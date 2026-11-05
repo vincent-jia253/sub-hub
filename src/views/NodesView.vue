@@ -163,6 +163,23 @@
           <RefreshCw :size="14" />
           <span>刷新</span>
         </button>
+
+        <div class="view-toggle" role="group" aria-label="视图切换">
+          <button
+            :class="['vt-btn', { active: viewMode === 'cards' }]"
+            title="卡片视图（延迟总结 + 流量 / 到期信息）"
+            @click="setViewMode('cards')"
+          >
+            <LayoutGrid :size="15" />
+          </button>
+          <button
+            :class="['vt-btn', { active: viewMode === 'list' }]"
+            title="列表视图"
+            @click="setViewMode('list')"
+          >
+            <List :size="15" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -176,6 +193,96 @@
       <div v-else-if="filteredNodes.length === 0" class="empty-state">
         <Radio :size="40" class="text-dim" />
         <p>没有匹配的节点数据</p>
+      </div>
+
+      <!-- 卡片视图 -->
+      <div v-else-if="viewMode === 'cards'" class="cards-grid">
+        <div
+          v-for="node in pagedNodes"
+          :key="node.id"
+          class="node-card glass"
+          :class="{ 'card-selected': selectedIds.includes(node.id) }"
+        >
+          <div class="nc-top">
+            <input
+              type="checkbox"
+              :value="node.id"
+              v-model="selectedIds"
+            />
+            <span class="nc-name" :title="node.name">{{ node.name }}</span>
+            <span class="nc-badge">{{ (node.type || '').toUpperCase() }}</span>
+            <span :class="['nc-delay-chip', getDelayClass(node.delay)]">
+              {{ node.delay > 0 ? node.delay + ' ms' : (node.delay === -1 ? '超时' : '未测') }}
+            </span>
+          </div>
+
+          <div class="nc-server" :title="`${node.server}:${node.port}`">
+            {{ node.server }}:{{ node.port }} · {{ (node.network || 'tcp').toUpperCase() }}<template v-if="node.tls"> · TLS</template>
+          </div>
+
+          <div class="nc-section">
+            <div class="nc-sec-head">
+              <span class="nc-sec-label">延迟总结</span>
+              <span class="nc-sec-right">近 {{ delayHistoryOf(node).length || 0 }} 次</span>
+            </div>
+            <div class="history-bar">
+              <template v-if="delayHistoryOf(node).length">
+                <span
+                  v-for="(h, i) in delayHistoryOf(node)"
+                  :key="i"
+                  :class="['hist-seg', 'seg-' + delaySegClass(h.d)]"
+                  :title="`${new Date(h.t).toLocaleString()} — ${h.d > 0 ? h.d + ' ms' : '超时'}`"
+                ></span>
+              </template>
+              <template v-else>
+                <span v-for="i in 15" :key="'e' + i" class="hist-seg seg-empty"></span>
+              </template>
+            </div>
+            <div class="nc-sec-stats">
+              <span>平均 {{ avgDelayOf(node) !== null ? avgDelayOf(node) + ' ms' : '—' }}</span>
+              <span>存活 {{ aliveRateOf(node) }}</span>
+            </div>
+          </div>
+
+          <div class="nc-speed" v-if="node.speedStatus === 'ok' && node.speedMbps > 0">
+            <Gauge :size="14" />
+            <span>{{ node.speedMbps.toFixed(2) }} Mbps</span>
+          </div>
+
+          <div class="nc-traffic" v-if="node.trafficTotal > 0">
+            <div class="traffic-track">
+              <div
+                class="traffic-fill"
+                :class="trafficPct(node) >= 90 ? 'tf-danger' : trafficPct(node) >= 70 ? 'tf-warn' : ''"
+                :style="{ width: Math.min(trafficPct(node), 100) + '%' }"
+              ></div>
+            </div>
+            <div class="traffic-meta">
+              <span>{{ formatBytes(node.trafficUsed) }} / {{ formatBytes(node.trafficTotal) }}（{{ trafficPct(node) }}%）</span>
+              <span :class="{ 'text-danger': expireSoon(node) }">{{ expireText(node) }}</span>
+            </div>
+          </div>
+
+          <div class="nc-actions">
+            <button class="action-btn" title="单独测延迟 (超时自动重试3次)" :disabled="testingNodeIds.has(node.id) || bundleBusy" @click="testSingleNode(node)">
+              <Zap v-if="!testingNodeIds.has(node.id)" :size="15" />
+              <Loader2 v-else :size="15" class="animate-spin" />
+            </button>
+            <button class="action-btn" title="单独测网速（真实下载带宽）" :disabled="speedTestingIds.has(node.id) || bundleBusy" @click="speedTestSingleNode(node)">
+              <Gauge v-if="!speedTestingIds.has(node.id)" :size="15" />
+              <Loader2 v-else :size="15" class="animate-spin" />
+            </button>
+            <button class="action-btn" title="清空该节点的延迟与网速结果" @click="clearNodeResults(node)">
+              <Eraser :size="15" />
+            </button>
+            <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
+              <Edit3 :size="15" />
+            </button>
+            <button class="action-btn action-danger" title="删除节点" @click="deleteNode(node)">
+              <Trash2 :size="15" />
+            </button>
+          </div>
+        </div>
       </div>
 
       <div v-else class="table-responsive">
@@ -403,6 +510,22 @@
             </label>
           </div>
 
+          <div class="form-divider">节点信息（卡片展示用，机场订阅节点会在刷新时自动填充）</div>
+          <div class="form-row">
+            <div class="form-group col-4">
+              <label>总流量 (GB，0 = 未知)</label>
+              <input v-model.number="editTraffic.totalGb" type="number" min="0" step="0.01" />
+            </div>
+            <div class="form-group col-4">
+              <label>已用流量 (GB)</label>
+              <input v-model.number="editTraffic.usedGb" type="number" min="0" step="0.01" />
+            </div>
+            <div class="form-group col-4">
+              <label>到期日期</label>
+              <input v-model="editTraffic.expireDate" type="date" />
+            </div>
+          </div>
+
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" @click="showEditModal = false">取消</button>
             <button type="submit" class="btn btn-primary">保存修改</button>
@@ -435,6 +558,8 @@ import {
   ChevronDown,
   Clock,
   Layers,
+  List,
+  LayoutGrid,
   X
 } from 'lucide-vue-next';
 import api from '../api';
@@ -459,6 +584,72 @@ const showClearMenu = ref(false);
 
 const currentPage = ref(1);
 const pageSize = ref(30);
+
+/* ---------------- 视图模式（卡片 / 列表） ---------------- */
+const VIEW_MODE_KEY = 'sub_nodes_view';
+const viewMode = ref(localStorage.getItem(VIEW_MODE_KEY) || 'list');
+const setViewMode = (mode) => {
+  viewMode.value = mode;
+  localStorage.setItem(VIEW_MODE_KEY, mode);
+};
+
+/* ---------------- 卡片：延迟总结与流量信息 ---------------- */
+const HISTORY_LIMIT = 15; // 色块条最多展示最近 15 次
+
+const delayHistoryOf = (node) => {
+  const list = Array.isArray(node.delayHistory) ? node.delayHistory : [];
+  return list.slice(-HISTORY_LIMIT);
+};
+
+// 色块分段：绿 <200 / 黄 <500 / 橙 <1000 / 红 ≥1000 / 深红 超时
+const delaySegClass = (d) => {
+  if (d === -1) return 'timeout';
+  if (d < 200) return 'fast';
+  if (d < 500) return 'mid';
+  if (d < 1000) return 'slow';
+  return 'bad';
+};
+
+const avgDelayOf = (node) => {
+  const ok = delayHistoryOf(node).filter(h => h.d > 0);
+  if (!ok.length) return null;
+  return Math.round(ok.reduce((s, h) => s + h.d, 0) / ok.length);
+};
+
+const aliveRateOf = (node) => {
+  const list = delayHistoryOf(node);
+  if (!list.length) return '—';
+  const alive = list.filter(h => h.d > 0).length;
+  return `${Math.round((alive / list.length) * 100)}%`;
+};
+
+const formatBytes = (bytes) => {
+  const b = Number(bytes) || 0;
+  if (b <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(b) / Math.log(1024)), units.length - 1);
+  return `${(b / Math.pow(1024, i)).toFixed(i >= 2 ? 1 : 0)} ${units[i]}`;
+};
+
+const trafficPct = (node) => {
+  const total = Number(node.trafficTotal) || 0;
+  if (total <= 0) return 0;
+  return Math.round(((Number(node.trafficUsed) || 0) / total) * 100);
+};
+
+const expireSoon = (node) => {
+  const t = Number(node.expireAt) || 0;
+  return t > 0 && t - Date.now() < 30 * 86400 * 1000;
+};
+
+const expireText = (node) => {
+  const t = Number(node.expireAt) || 0;
+  if (!t) return '到期：未知';
+  const days = Math.ceil((t - Date.now()) / 86400 / 1000);
+  const d = new Date(t);
+  const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return days <= 0 ? `${dateStr} 已到期` : `${dateStr}（剩 ${days} 天）`;
+};
 
 /* ---------------- 表头排序 ---------------- */
 const SORT_STORAGE_KEY = 'sub_nodes_sort';
@@ -735,10 +926,13 @@ const toggleSelectAll = () => {
 };
 
 const getDelayClass = (delay) => {
+  if (!delay || delay === 0) return 'delay-none';
+  if (delay === -1) return 'delay-slow';
   if (delay <= 300) return 'delay-fast';
   if (delay <= 800) return 'delay-medium';
   return 'delay-slow';
 };
+
 
 const startSpeedTest = () => {
   // 按当前展示顺序测速
@@ -863,6 +1057,8 @@ const clearNodeResults = async (node) => {
       delay: 0,
       status: 'untested',
       lastTestTime: null,
+      delayHistory: [],
+      retriesUsed: 0,
       speed: null,
       speedMbps: 0,
       speedBps: 0,
@@ -951,14 +1147,28 @@ const deleteNode = async (node) => {
   }
 };
 
+const GB = 1024 ** 3;
+const editTraffic = reactive({ totalGb: 0, usedGb: 0, expireDate: '' });
+
 const openEditNode = (node) => {
   Object.assign(editForm, JSON.parse(JSON.stringify(node)));
+  editTraffic.totalGb = node.trafficTotal ? Math.round((node.trafficTotal / GB) * 100) / 100 : 0;
+  editTraffic.usedGb = node.trafficUsed ? Math.round((node.trafficUsed / GB) * 100) / 100 : 0;
+  editTraffic.expireDate = node.expireAt
+    ? new Date(node.expireAt).toISOString().slice(0, 10)
+    : '';
   showEditModal.value = true;
 };
 
 const submitEditNode = async () => {
   try {
-    await api.put(`/nodes/${editForm.id}`, editForm);
+    const payload = { ...editForm };
+    delete payload.delayHistory;
+    payload.trafficTotal = Math.max(0, Number(editTraffic.totalGb) || 0) * GB;
+    payload.trafficUsed = Math.max(0, Number(editTraffic.usedGb) || 0) * GB;
+    payload.expireAt = editTraffic.expireDate ? new Date(editTraffic.expireDate + 'T00:00:00').getTime() : 0;
+    payload.trafficSource = 'manual';
+    await api.put(`/nodes/${editForm.id}`, payload);
     showEditModal.value = false;
     await fetchNodes();
     emit('data-changed');
@@ -971,7 +1181,14 @@ const updateNodeInPlace = (nodeResult) => {
   if (!nodeResult || !nodeResult.id) return;
   const target = nodes.value.find(n => n.id === nodeResult.id);
   if (target) {
-    if (typeof nodeResult.delay === 'number') target.delay = nodeResult.delay;
+    if (typeof nodeResult.delay === 'number') {
+      target.delay = nodeResult.delay;
+      // 实时同步延迟历史（卡片色块条）
+      if (nodeResult.delay > 0 || nodeResult.delay === -1) {
+        if (!Array.isArray(target.delayHistory)) target.delayHistory = [];
+        target.delayHistory = [...target.delayHistory, { t: Date.now(), d: nodeResult.delay }].slice(-30);
+      }
+    }
     if (nodeResult.status) target.status = nodeResult.status;
     if (nodeResult.inCombinedSub !== undefined) target.inCombinedSub = Boolean(nodeResult.inCombinedSub);
     if (nodeResult.lastTestTime) target.lastTestTime = nodeResult.lastTestTime;
@@ -1642,5 +1859,266 @@ defineExpose({
     flex: 1;
     width: 100%;
   }
+}
+
+/* ---------------- 视图切换 ---------------- */
+.view-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.view-toggle .vt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.view-toggle .vt-btn:hover {
+  color: var(--text-main);
+}
+
+.view-toggle .vt-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ---------------- 卡片视图 ---------------- */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+
+.node-card {
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.node-card:hover {
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+}
+
+.node-card.card-selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+.nc-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.nc-top input[type='checkbox'] {
+  flex: 0 0 auto;
+}
+
+.nc-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-badge {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-dim);
+}
+
+.nc-delay-chip {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.nc-delay-chip.delay-fast { background: rgba(16, 185, 129, 0.14); color: #059669; }
+.nc-delay-chip.delay-medium { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.nc-delay-chip.delay-slow { background: rgba(239, 68, 68, 0.14); color: #dc2626; }
+.nc-delay-chip.delay-none { background: var(--bg-secondary); color: var(--text-dim); }
+
+.nc-server {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 延迟总结块 */
+.nc-section {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: var(--bg-secondary);
+}
+
+.nc-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.nc-sec-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.nc-sec-right {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.nc-delay-chip-inline { font-size: 11.5px; font-weight: 700; }
+
+.history-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 9px;
+}
+
+.hist-seg {
+  flex: 1 1 0;
+  height: 100%;
+  border-radius: 2.5px;
+  min-width: 3px;
+}
+
+.hist-seg.fast { background: #10b981; }
+.hist-seg.mid { background: #f59e0b; }
+.hist-seg.slow { background: #f97316; }
+.hist-seg.bad { background: #ef4444; }
+.hist-seg.timeout { background: #7f1d1d; }
+.hist-seg.empty { background: var(--border-color); opacity: 0.55; }
+
+.nc-sec-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.nc-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+/* 流量条 */
+.nc-traffic {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.traffic-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+
+.traffic-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.traffic-fill.tf-warn { background: #f59e0b; }
+.traffic-fill.tf-danger { background: #ef4444; }
+
+.traffic-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.traffic-meta .text-danger { color: #dc2626; font-weight: 600; }
+
+/* 卡片操作行 */
+.nc-actions {
+  display: flex;
+  gap: 6px;
+  border-top: 1px dashed var(--border-color);
+  padding-top: 9px;
+  margin-top: 2px;
+}
+
+.nc-actions .action-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nc-actions .action-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.nc-actions .action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.nc-actions .action-btn.action-danger:hover:not(:disabled) {
+  color: #dc2626;
+  border-color: #dc2626;
+}
+
+/* 编辑弹窗分隔线 */
+.form-divider {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  border-top: 1px dashed var(--border-color);
+  padding-top: 10px;
+  margin-top: 4px;
 }
 </style>

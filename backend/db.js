@@ -519,6 +519,7 @@ class Database {
         n.status = 'untested';
         n.lastTestTime = null;
         n.retriesUsed = 0;
+        n.delayHistory = [];
       }
       if (wantTypes.includes('speed')) {
         n.speed = null;
@@ -548,10 +549,18 @@ class Database {
   }
 
   updateNodesBatch(updatesList) {    const map = new Map(updatesList.map(u => [u.id, u]));
+    const now = Date.now();
     for (let i = 0; i < this.data.nodes.length; i++) {
       const u = map.get(this.data.nodes[i].id);
       if (u) {
-        this.data.nodes[i] = { ...this.data.nodes[i], ...u };
+        const n = this.data.nodes[i];
+        const next = { ...n, ...u };
+        // 延迟测速结果（含超时 -1）追加到历史，保留最近 30 条，供卡片「延迟总结」色块条使用
+        if (Object.prototype.hasOwnProperty.call(u, 'delay') && (u.delay > 0 || u.delay === -1)) {
+          const hist = Array.isArray(n.delayHistory) ? n.delayHistory : [];
+          next.delayHistory = [...hist, { t: now, d: u.delay }].slice(-30);
+        }
+        this.data.nodes[i] = next;
       }
     }
     this.save();
