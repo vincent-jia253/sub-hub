@@ -118,6 +118,24 @@
 
 ---
 
+## ⚡ 网速测速（真实下载带宽）
+
+延迟只代表"握手快不快"，不代表"下载快不快"。网速测速会让每个节点**真实下载一段数据**，算出实际 Mbps：
+
+| 项 | 说明 |
+|---|---|
+| 原理 | 以 `mode: global` 启动临时 Mihomo 内核 + 随机 `mixed-port`，逐个 `PUT /proxies/GLOBAL` 切换出口，再用 CONNECT 隧道下载并统计字节 |
+| 指标 | 丢弃前 600ms 的 TCP 慢启动窗口，取稳态区间算 `Mbps`；同时记录首字节耗时、下载字节数与耗时 |
+| 测速目标 | 默认 `https://speed.cloudflare.com/__down?bytes=31457280`（Cloudflare Anycast，全球可达），失败自动回退 cachefly |
+| 触发方式 | ① 节点页「测网速（当前筛选）」 ② 定时任务（系统配置可开关 + 改 Cron） ③ `POST /api/nodes/speed-test` |
+| 数据落地 | 节点字段 `speed / speedStatus / speedTime / speedBytes / speedDurationMs / speedUrl`，节点表「网速」列可排序 |
+
+**为什么不直接测 YouTube**：视频是自适应码率流（1080p 一般只给 5~8Mbps），测出来的是"YouTube 分配了多少码率"而不是节点上限，还要处理会话与 DRM。Cloudflare 测速端点走的是同一条节点出口，测的是真实吞吐上限。
+
+**流量成本**：每轮测速会真实消耗节点流量（默认约 30MB/节点）。8 个节点每天跑一次 ≈ 240MB/天，介意就把 Cron 调稀，或把测速范围收窄到「仅整合订阅内」。
+
+---
+
 ## 📁 目录结构说明
 
 ```
@@ -126,6 +144,8 @@ SUB/
 │   ├── server.js             # Express API 与 WebSocket 主服务
 │   ├── parser.js             # VMess/VLESS/SS/SSR/Trojan/Hy2/TUIC 等全协议解析器
 │   ├── tester.js             # Mihomo 内核动态调用与并发延迟测速
+│   ├── speedtest.js          # 节点真实下载带宽测速（CONNECT 隧道 + 稳态吞吐）
+│   ├── speedRunner.js        # 网速测速任务编排（手动 / 定时共用）
 │   ├── generator.js          # Loyalsoldier 分流规则生成与订阅配置构建
 │   ├── fetcher.js            # 机场订阅远程抓取与容错更新
 │   ├── scheduler.js          # 定时后台自动刷新任务

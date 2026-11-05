@@ -157,6 +157,75 @@
         </div>
       </div>
 
+      <!-- Bandwidth (real download speed) test -->
+      <div class="card glass full-width-card">
+        <div class="card-header">
+          <div class="card-title">
+            <Gauge class="text-primary" :size="18" />
+            <span>网速测速（节点真实下载带宽）</span>
+          </div>
+          <span class="hint">延迟低 ≠ 速度快。网速测速会让每个节点真实下载一段数据，算出实际 Mbps。</span>
+        </div>
+
+        <div class="card-body form-body">
+          <div class="setting-toggle-row">
+            <div class="setting-toggle-copy">
+              <span class="setting-toggle-title">开启定时网速测速</span>
+              <span class="hint">开启后按下方 Cron 表达式自动为节点测速，结果写入「节点池与测速」的「网速」列</span>
+            </div>
+            <label class="switch" title="定时网速测速">
+              <input type="checkbox" v-model="settings.speedTestEnabled" />
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="form-row" v-if="settings.speedTestEnabled">
+            <div class="form-group col-6">
+              <label>测速 Crontab 表达式</label>
+              <input v-model="settings.speedTestCron" type="text" placeholder="0 4 * * *" />
+              <span class="hint">默认每天凌晨 4 点（<code>0 4 * * *</code>）</span>
+            </div>
+            <div class="form-group col-6">
+              <label>测速范围</label>
+              <select v-model="settings.speedTestScope">
+                <option value="alive">仅可用节点（有延迟数据的）</option>
+                <option value="combined">仅整合订阅内的节点</option>
+                <option value="all">全部节点</option>
+              </select>
+              <span class="hint">节点多时建议只测「可用节点」或「整合订阅内」，避免占用带宽</span>
+            </div>
+            <div class="quick-cron-tags">
+              <span class="cron-tag" @click="settings.speedTestCron = '0 */2 * * *'">每 2 小时</span>
+              <span class="cron-tag" @click="settings.speedTestCron = '0 */6 * * *'">每 6 小时</span>
+              <span class="cron-tag" @click="settings.speedTestCron = '0 4 * * *'">每天凌晨4点</span>
+              <span class="cron-tag" @click="settings.speedTestCron = '0 */12 * * *'">每 12 小时</span>
+              <span class="cron-tag" @click="settings.speedTestCron = '0 9,21 * * *'">每天早晚各一次</span>
+            </div>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          <div class="form-group">
+            <label>测速下载地址</label>
+            <input v-model="settings.speedTestUrl" type="text" placeholder="https://speed.cloudflare.com/__down?bytes=31457280" />
+            <span class="hint">默认 Cloudflare 官方测速端点（Anycast，全球可达）。也可换成任何大文件直链，如 <code>https://cachefly.cachefly.net/10mb.test</code></span>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label>单节点下载时长 (毫秒)</label>
+              <input v-model.number="settings.speedTestDurationMs" type="number" placeholder="6000" />
+              <span class="hint">建议 5000~8000，太短会受 TCP 慢启动影响；每轮测速会真实消耗节点流量（默认约 30MB/节点）</span>
+            </div>
+            <div class="form-group col-6">
+              <label>并发节点数</label>
+              <input v-model.number="settings.speedTestConcurrency" type="number" placeholder="1" />
+              <span class="hint">带宽共享，建议 1~3。并发越高单节点读数越低</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Refresh, Schedule & Network -->
       <div class="card glass">
         <div class="card-header">
@@ -314,7 +383,8 @@ import {
   DownloadCloud,
   CheckCircle2,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  Gauge
 } from 'lucide-vue-next';
 import api from '../api';
 
@@ -327,7 +397,13 @@ const settings = reactive({
   autoRefreshEnabled: true,
   autoRefreshInterval: '0 */6 * * *',
   autoTestAfterRefresh: true,
-  ignoreTlsVerify: true
+  ignoreTlsVerify: true,
+  speedTestEnabled: false,
+  speedTestCron: '0 4 * * *',
+  speedTestScope: 'combined',
+  speedTestUrl: 'https://speed.cloudflare.com/__down?bytes=31457280',
+  speedTestDurationMs: 6000,
+  speedTestConcurrency: 1
 });
 
 const saving = ref(false);

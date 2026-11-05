@@ -32,7 +32,15 @@ const DEFAULT_DB = {
     ignoreTlsVerify: true,
     cdnProvider: 'github', // 'github', 'jsdelivr', 'fastly'
     fofaEmail: '',
-    fofaApiKey: ''
+    fofaApiKey: '',
+    // ---- 网速测速（节点真实下载带宽）----
+    speedTestEnabled: false,
+    speedTestCron: '0 4 * * *',
+    speedTestScope: 'combined', // 'alive' 仅可用节点 / 'combined' 仅整合订阅内 / 'all' 全部
+    speedTestUrl: 'https://speed.cloudflare.com/__down?bytes=31457280',
+    speedTestDurationMs: 6000,
+    speedTestMaxBytes: 50331648,
+    speedTestConcurrency: 1
   },
   subscriptions: [],
   nodes: [],
@@ -458,6 +466,8 @@ class Database {
       subId: node.subId || 'manual',
       status: 'untested',
       delay: 0,
+      speed: null,
+      speedStatus: 'untested',
       inCombinedSub: Boolean(node.inCombinedSub),
       createTime: new Date().toISOString()
     };

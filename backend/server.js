@@ -14,6 +14,7 @@ const generator = require('./generator');
 const fetcher = require('./fetcher');
 const coreManager = require('./coreManager');
 const fofaManager = require('./fofaManager');
+const speedRunner = require('./speedRunner');
 const { fetchSubscription, fetchAllSubscriptions } = fetcher;
 const scheduler = require('./scheduler');
 
@@ -37,6 +38,7 @@ function broadcast(type, payload) {
   });
 }
 fetcher.setBroadcast(broadcast);
+speedRunner.setBroadcast(broadcast);
 
 function getPublicSettings() {
   const { fofaApiKey, ...safeSettings } = db.getSettings();
@@ -190,6 +192,7 @@ app.post('/api/settings', authMiddleware, (req, res) => {
   const { fofaApiKey, fofaEmail, ...safeUpdates } = req.body || {};
   db.updateSettings(safeUpdates);
   scheduler.restart();
+  scheduler.restartSpeedTest();
   res.json(getPublicSettings());
 });
 
@@ -606,11 +609,32 @@ app.post('/api/nodes/test-speed', authMiddleware, async (req, res) => {
   }
 });
 
+// 节点真实带宽（网速）测速：通过每个节点实际下载文件，统计稳态吞吐 (Mbps)
+app.post('/api/nodes/speed-test', authMiddleware, (req, res) => {
+  const { ids, subId, scope, durationMs, maxBytes, concurrency, url } = req.body || {};
+  try {
+    const job = speedRunner.startSpeedTest({ ids, subId, scope, durationMs, maxBytes, concurrency, url, trigger: 'manual' });
+    res.json({ message: '网速测速任务已在后台启动', ...job });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/nodes/speed-test/status', authMiddleware, (req, res) => {
+  res.json({ running: speedRunner.isRunning(), settings: {
+    speedTestEnabled: db.getSettings().speedTestEnabled,
+    speedTestCron: db.getSettings().speedTestCron,
+    speedTestUrl: db.getSettings().speedTestUrl,
+    speedTestDurationMs: db.getSettings().speedTestDurationMs,
+    speedTestConcurrency: db.getSettings().speedTestConcurrency,
+    speedTestScope: db.getSettings().speedTestScope
+  } });
+});
+
 // Profiles (整合订阅)
 app.get('/api/profiles', authMiddleware, (req, res) => {
   res.json(db.getProfiles());
 });
-
 app.post('/api/profiles', authMiddleware, (req, res) => {
   const newProf = db.addProfile(req.body);
   res.json(newProf);

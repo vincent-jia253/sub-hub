@@ -18,6 +18,16 @@
           <span>{{ isTesting ? `测速中 (${testProgress.current}/${testProgress.total})` : '测试当前筛选节点 (含3次重试)' }}</span>
         </button>
 
+        <button
+          class="btn btn-secondary"
+          @click="startSpeedMeasure"
+          :disabled="speedTesting || filteredNodes.length === 0"
+          title="通过每个节点真实下载一个文件（默认 Cloudflare 30MB 测速点）算出实际带宽，比延迟更能反映真实体感；结果写入「网速」列"
+        >
+          <Gauge :size="16" />
+          <span>{{ speedTesting ? '网速测速中...' : '测网速（当前筛选）' }}</span>
+        </button>
+
         <button class="btn btn-secondary" @click="deduplicateNodes">
           <Copy :size="16" />
           <span>节点去重</span>
@@ -223,6 +233,21 @@
                 </div>
               </td>
 
+              <td class="node-speed-cell">
+                <div class="speed-wrapper" :title="speedTooltip(node)">
+                  <template v-if="node.speedStatus === 'ok' && node.speed > 0">
+                    <span :class="['speed-value', getSpeedClass(node.speed)]">
+                      {{ formatSpeed(node.speed) }}
+                    </span>
+                    <span class="speed-sub">{{ formatSpeedMeta(node) }}</span>
+                  </template>
+                  <span v-else-if="node.speedStatus === 'failed'" class="speed-failed">
+                    测速失败
+                  </span>
+                  <span v-else class="speed-untested">未测</span>
+                </div>
+              </td>
+
               <td>
                 <div class="table-actions">
                   <button
@@ -352,6 +377,7 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  Gauge,
   X
 } from 'lucide-vue-next';
 import api from '../api';
@@ -369,6 +395,7 @@ const subs = ref([]);
 const loading = ref(false);
 const selectedIds = ref([]);
 const testingNodeIds = ref(new Set());
+const speedTesting = ref(false);
 
 const currentPage = ref(1);
 const pageSize = ref(30);
@@ -383,7 +410,8 @@ const sortableColumns = [
   { key: 'server', label: '服务器 : 端口', width: '190' },
   { key: 'network', label: '网络 / 伪装', width: '95' },
   { key: 'inCombinedSub', label: '整合订阅', width: '115' },
-  { key: 'delay', label: '延迟', width: '110' }
+  { key: 'delay', label: '延迟', width: '110' },
+  { key: 'speed', label: '网速', width: '120' }
 ];
 const SORT_KEYS = sortableColumns.map(c => c.key);
 
@@ -394,7 +422,8 @@ const SORT_FIRST_DIR = {
   server: 'asc',
   network: 'asc',
   inCombinedSub: 'desc',
-  delay: 'asc'
+  delay: 'asc',
+  speed: 'asc'
 };
 
 const sortKey = ref('');
@@ -471,6 +500,13 @@ const delayRank = (n) => {
   return 2;
 };
 
+// 网速排序分组：0=有有效速率，1=测速失败，2=未测（永远排在最后）
+const speedRank = (n) => {
+  if (n.speedStatus === 'ok' && n.speed > 0) return 0;
+  if (n.speedStatus === 'failed') return 1;
+  return 2;
+};
+
 const compareBy = (key) => (a, b) => {
   switch (key) {
     case 'name':
@@ -496,6 +532,13 @@ const compareBy = (key) => (a, b) => {
       const rb = delayRank(b);
       if (ra !== rb) return ra - rb;
       if (ra === 0) return a.delay - b.delay;
+      return nameCollator.compare(a.name || '', b.name || '');
+    }
+    case 'speed': {
+      const ra = speedRank(a);
+      const rb = speedRank(b);
+      if (ra !== rb) return ra - rb;
+      if (ra === 0) return (a.speed || 0) - (b.speed || 0);
       return nameCollator.compare(a.name || '', b.name || '');
     }
     default:
@@ -578,24 +621,27 @@ const filteredNodes = computed(() => {
 // 在筛选结果上应用排序（排序只影响展示顺序，不改动后端数据）
 const sortedNodes = computed(() => {
   const list = filteredNodes.value;
-  if (!sortKey.value) return list;
+  const key = sortKey.value;
+  if (!key) return list;
 
-  const cmp = compareBy(sortKey.value);
   const dir = sortDir.value === 'desc' ? -1 : 1;
   const arr = list.slice();
 
-  if (sortKey.value === 'delay') {
-    // 延迟列特殊处理：无有效延迟的节点永远排在末尾，不随升降序翻转
+  // 延迟 / 网速：无数据（超时、失败、未测）永远排末尾，不随升降序翻转
+  if (key === 'delay' || key === 'speed') {
+    const rankOf = key === 'delay' ? delayRank : speedRank;
+    const valueOf = (n) => (key === 'delay' ? (n.delay || 0) : (n.speed || 0));
     arr.sort((a, b) => {
-      const ra = delayRank(a);
-      const rb = delayRank(b);
+      const ra = rankOf(a);
+      const rb = rankOf(b);
       if (ra !== rb) return ra - rb;
-      if (ra === 0) return (a.delay - b.delay) * dir;
+      if (ra === 0) return (valueOf(a) - valueOf(b)) * dir;
       return nameCollator.compare(a.name || '', b.name || '');
     });
     return arr;
   }
 
+  const cmp = compareBy(key);
   arr.sort((a, b) => cmp(a, b) * dir);
   return arr;
 });
@@ -643,6 +689,52 @@ const startSpeedTest = () => {
 const testSingleNode = (node) => {
   testingNodeIds.value.add(node.id);
   emit('start-test', [node.id]);
+};
+
+/* ---------------- 网速（真实带宽） ---------------- */
+const startSpeedMeasure = async () => {
+  if (speedTesting.value || filteredNodes.value.length === 0) return;
+  speedTesting.value = true;
+  try {
+    await api.post('/nodes/speed-test', { ids: sortedNodes.value.map(n => n.id) });
+  } catch (e) {
+    speedTesting.value = false;
+    alert('启动网速测速失败: ' + e.message);
+  }
+};
+
+const clearSpeedTesting = () => {
+  speedTesting.value = false;
+};
+
+const formatSpeed = (mbps) => {
+  if (!(mbps > 0)) return '0';
+  if (mbps >= 100) return `${Math.round(mbps)} Mbps`;
+  return `${mbps.toFixed(1)} Mbps`;
+};
+
+const formatSpeedMeta = (node) => {
+  const mb = node.speedBytes ? node.speedBytes / 1048576 : 0;
+  const sec = node.speedDurationMs ? node.speedDurationMs / 1000 : 0;
+  if (!mb || !sec) return '';
+  return `${mb.toFixed(1)}MB / ${sec.toFixed(1)}s`;
+};
+
+const getSpeedClass = (mbps) => {
+  if (mbps >= 50) return 'speed-fast';
+  if (mbps >= 10) return 'speed-medium';
+  return 'speed-slow';
+};
+
+const speedTooltip = (node) => {
+  if (node.speedStatus === 'ok' && node.speed > 0) {
+    const time = node.speedTime ? new Date(node.speedTime).toLocaleString() : '未知';
+    return `实测带宽 ${formatSpeed(node.speed)}｜下载 ${formatSpeedMeta(node)}｜首字节 ${node.speedFirstByteMs || 0} ms｜测试时间 ${time}\n测试目标：${node.speedUrl || '-'}`;
+  }
+  if (node.speedStatus === 'failed') {
+    return `测速失败：${node.speedError || '下载无数据'}\n时间：${node.speedTime ? new Date(node.speedTime).toLocaleString() : '-'}`;
+  }
+  return '尚未测网速，点击「测网速（当前筛选）」开始';
 };
 
 const toggleNodeCombined = async (node) => {
@@ -740,6 +832,18 @@ const updateNodeInPlace = (nodeResult) => {
     if (nodeResult.status) target.status = nodeResult.status;
     if (nodeResult.inCombinedSub !== undefined) target.inCombinedSub = Boolean(nodeResult.inCombinedSub);
     if (nodeResult.lastTestTime) target.lastTestTime = nodeResult.lastTestTime;
+    // 网速测速结果（实时增量更新）
+    if (nodeResult.speedStatus) {
+      target.speedStatus = nodeResult.speedStatus;
+      target.speed = typeof nodeResult.speed === 'number' ? nodeResult.speed : target.speed;
+      target.speedBps = nodeResult.speedBps;
+      target.speedBytes = nodeResult.speedBytes;
+      target.speedDurationMs = nodeResult.speedDurationMs;
+      target.speedFirstByteMs = nodeResult.speedFirstByteMs;
+      target.speedUrl = nodeResult.speedUrl;
+      target.speedError = nodeResult.speedError;
+      target.speedTime = nodeResult.speedTime;
+    }
   }
   testingNodeIds.value.delete(nodeResult.id);
 };
@@ -755,6 +859,17 @@ const updateNodesInPlace = (resultsList) => {
       if (res.status) node.status = res.status;
       if (res.inCombinedSub !== undefined) node.inCombinedSub = Boolean(res.inCombinedSub);
       if (res.lastTestTime) node.lastTestTime = res.lastTestTime;
+      if (res.speedStatus) {
+        node.speedStatus = res.speedStatus;
+        node.speed = typeof res.speed === 'number' ? res.speed : node.speed;
+        node.speedBps = res.speedBps;
+        node.speedBytes = res.speedBytes;
+        node.speedDurationMs = res.speedDurationMs;
+        node.speedFirstByteMs = res.speedFirstByteMs;
+        node.speedUrl = res.speedUrl;
+        node.speedError = res.speedError;
+        node.speedTime = res.speedTime;
+      }
       testingNodeIds.value.delete(node.id);
     }
   }
@@ -767,13 +882,18 @@ const clearTestingStates = () => {
 onMounted(() => {
   fetchSubs();
   fetchNodes();
+  // 页面刷新后同步"网速测速是否正在跑"的状态
+  api.get('/nodes/speed-test/status')
+    .then(res => { speedTesting.value = Boolean(res && res.running); })
+    .catch(() => {});
 });
 
 defineExpose({
   fetchNodes,
   updateNodeInPlace,
   updateNodesInPlace,
-  clearTestingStates
+  clearTestingStates,
+  clearSpeedTesting
 });
 </script>
 
@@ -922,6 +1042,48 @@ defineExpose({
 .sort-reset-btn:hover .sort-reset-x {
   opacity: 1;
   color: var(--danger, #ef4444);
+}
+
+/* ---- 网速（真实带宽）列 ---- */
+.node-speed-cell {
+  white-space: nowrap;
+}
+
+.speed-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.speed-value {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.speed-fast { color: #059669; }
+.speed-medium { color: #2563eb; }
+.speed-slow { color: #d97706; }
+
+[data-theme="dark"] .speed-fast { color: #34d399; }
+[data-theme="dark"] .speed-medium { color: #60a5fa; }
+[data-theme="dark"] .speed-slow { color: #fbbf24; }
+
+.speed-sub {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.speed-failed {
+  color: #dc2626;
+  font-size: 12px;
+}
+
+[data-theme="dark"] .speed-failed { color: #f87171; }
+
+.speed-untested {
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 .nodes-table td {

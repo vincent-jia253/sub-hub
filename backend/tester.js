@@ -139,16 +139,16 @@ class MihomoTester {
     }
   }
 
-  async startMihomoWithNodes(nodes, { taskId, apiPort, secret, configFile }) {
+  async startMihomoWithNodes(nodes, { taskId, apiPort, secret, configFile, mixedPort = 0, mode = 'rule' }) {
     this.ensureTempDir();
 
     const cleanProxies = nodes.map(n => this.cleanProxyForMihomo(n));
 
     // Mihomo configuration
     const configData = {
-      'mixed-port': 0, // 设为 0 关闭本地代理端口监听，测速仅需 external-controller RESTful API，避免端口冲突或权限限制
+      'mixed-port': mixedPort, // 0 = 只开 API（纯延迟探测）；>0 = 同时开本地代理端口（带宽测速需要真实出流量）
       'allow-lan': false,
-      mode: 'rule',
+      mode: mode, // 'rule' 用于延迟探测；'global' 用于带宽测速（通过切换 GLOBAL 选择器逐节点下载）
       'log-level': 'warning',
       'external-controller': `127.0.0.1:${apiPort}`,
       secret: secret,

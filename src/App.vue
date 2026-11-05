@@ -240,7 +240,10 @@
               </div>
               <div class="latest-row" v-else-if="task.latest">
                 <span class="latest-name">{{ task.latest.name }}</span>
-                <span :class="['latest-delay', task.latest.delay > 0 ? 'text-success' : 'text-danger']">
+                <span v-if="task.kind === 'speed'" :class="['latest-delay', task.latest.speed > 0 ? 'text-success' : 'text-danger']">
+                  {{ task.latest.speed > 0 ? `${task.latest.speed} Mbps` : '测速失败' }}
+                </span>
+                <span v-else :class="['latest-delay', task.latest.delay > 0 ? 'text-success' : 'text-danger']">
                   {{ task.latest.delay > 0 ? `${task.latest.delay} ms` : '超时/移出' }}
                 </span>
               </div>
@@ -540,6 +543,7 @@ const setupWebSocket = () => {
           task = {
             id: taskId,
             subId: data.payload.subId,
+            kind: data.payload.kind || 'delay',
             status: 'testing',
             title,
             nodeName,
@@ -554,12 +558,14 @@ const setupWebSocket = () => {
           testTasks.value.push(task);
         } else {
           task.total = total || task.total;
+          if (data.payload.kind) task.kind = data.payload.kind;
           if (data.payload.title) task.title = data.payload.title;
         }
       } else if (data.type === 'test_progress') {
         const taskId = data.payload.taskId;
         let task = taskId ? testTasks.value.find(t => t.id === taskId) : testTasks.value[testTasks.value.length - 1];
         if (task) {
+          if (data.payload.kind) task.kind = data.payload.kind;
           task.current = data.payload.current;
           task.total = data.payload.total || task.total;
           task.latest = data.payload.latest;
@@ -582,8 +588,13 @@ const setupWebSocket = () => {
           task.status = 'completed';
           task.current = task.total;
           task.percentage = 100;
-          task.title = task.total === 1 ? '节点测速完成' : '并发测速完成';
+          task.title = task.kind === 'speed'
+            ? (task.total === 1 ? '网速测速完成' : '网速测速完成 (' + task.total + ' 个节点)')
+            : (task.total === 1 ? '节点测速完成' : '并发测速完成');
           startTaskAutoClose(task);
+        }
+        if (data.payload.kind === 'speed') {
+          nodesViewRef.value?.clearSpeedTesting?.();
         }
         // 局部更新对应节点数据（不刷新整个页面、不重置分页和滚动条）
         if (data.payload.results) {
@@ -608,6 +619,9 @@ const setupWebSocket = () => {
         }
         if (nodesViewRef.value?.clearTestingStates) {
           nodesViewRef.value.clearTestingStates();
+        }
+        if (data.payload?.kind === 'speed' && nodesViewRef.value?.clearSpeedTesting) {
+          nodesViewRef.value.clearSpeedTesting();
         }
         fetchStats();
       } else if (data.type === 'subscription_updated') {
