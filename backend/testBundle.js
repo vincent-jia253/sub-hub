@@ -129,7 +129,32 @@ function runBundle(opts = {}) {
 
         // 网速阶段只测本轮存活的节点
         if (mode === 'both' && settings.schedTestSpeedAliveOnly !== false) {
-          speedTargetIds = results.filter(r => r.status === 'alive').map(r => r.id);
+          // 延迟跑完到网速开始之间，订阅可能刚好刷新过（历史版本刷新会换 id）。
+          // 先按 id 认；认不到就用「subId + 名称」映射到当前库里的节点，避免这批节点被整批漏测。
+          const aliveResults = results.filter(r => r.status === 'alive');
+          const subOfName = new Map(targets.map(n => [n.name, n.subId || '']));
+          const freshNodes = db.getNodes();
+          const idSet = new Set(freshNodes.map(n => n.id));
+          const bySubName = new Map(freshNodes.map(n => [`${n.subId || ''}|${n.name}`, n.id]));
+          let remapped = 0;
+          speedTargetIds = [];
+          aliveResults.forEach(r => {
+            if (idSet.has(r.id)) {
+              speedTargetIds.push(r.id);
+              return;
+            }
+            const hit = bySubName.get(`${subOfName.get(r.name) || ''}|${r.name}`);
+            if (hit) {
+              speedTargetIds.push(hit);
+              remapped++;
+            }
+          });
+          if (remapped > 0) {
+            console.log(`[Bundle] 网速目标重映射：${remapped} 个节点 id 已变化（订阅刷新），按 subId+名称 对齐`);
+          }
+          if (speedTargetIds.length !== aliveResults.length) {
+            console.warn(`[Bundle] 网速目标缺失：存活 ${aliveResults.length} 个，匹配到 ${speedTargetIds.length} 个`);
+          }
         }
       }
 

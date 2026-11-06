@@ -119,11 +119,27 @@ async function fetchSubscription(subId) {
       if (old) {
         const merged = {
           ...n,
+          // 关键：沿用旧 id。否则每次刷新都换 id，正在跑的测速写不回、前端选中项失效，
+          // 网速阶段也会因拿旧 id 找不到节点而整批跳过（机场节点只测延迟不测网速的根因）
+          id: old.id,
           delay: old.delay || 0,
           status: old.status || 'untested',
           inCombinedSub: Boolean(old.inCombinedSub),
           lastTestTime: old.lastTestTime || null,
           delayHistory: Array.isArray(old.delayHistory) ? old.delayHistory : [],
+          // 网速结果同样要继承：否则每次定时刷新都会把上次带宽成绩抹掉，
+          // 表现就是「刷新后节点只剩延迟、网速为空」
+          speed: old.speed || 0,
+          speedMbps: old.speedMbps || 0,
+          speedBps: old.speedBps || 0,
+          speedStatus: old.speedStatus || '',
+          speedTime: old.speedTime || null,
+          speedBytes: old.speedBytes || 0,
+          speedDurationMs: old.speedDurationMs || 0,
+          speedFirstByteMs: old.speedFirstByteMs || 0,
+          speedUrl: old.speedUrl || '',
+          speedError: old.speedError || '',
+          speedHistory: Array.isArray(old.speedHistory) ? old.speedHistory : [],
           trafficUsed: old.trafficUsed || 0,
           trafficTotal: old.trafficTotal || 0,
           expireAt: old.expireAt || 0,
