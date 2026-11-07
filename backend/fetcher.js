@@ -1,11 +1,43 @@
 const axios = require('axios');
 const https = require('https');
+const http = require('http');
+const dns = require('dns');
 const yaml = require('yaml');
 const db = require('./db');
 const { parseSubscriptionContent } = require('./parser');
 const tester = require('./tester');
 
 const DEFAULT_USER_AGENT = 'ClashMeta/1.19.31 (Clash.Meta; Linux x86_64)';
+
+/* ------------------------------------------------------------------
+ * 出站网络的 IPv6 问题
+ * 部分机场/订阅域名（尤其 Cloudflare 后面的）解析结果是 AAAA 在前，
+ * 而本机或容器到该 IPv6 地址的握手会被对端直接 RST，
+ * 在 axios 里表现为 `read ECONNRESET`，页面上就是「订阅更新失败」。
+ * 处理方式：
+ *   1) 进程级默认改成 IPv4 优先（纯 IPv6 域名仍然能解析，因为那时只有 AAAA）；
+ *   2) 万一仍然握手失败，自动用强制 IPv4 的 lookup 再试一次。
+ * ------------------------------------------------------------------ */
+try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
+
+function ipv4Lookup(hostname, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  dns.lookup(hostname, Object.assign({}, options || {}, { family: 4 }), callback);
+}
+
+// 只对「链路层」错误做 IPv4 重试；证书错误、404、401 等重试也没意义
+const NET_ERROR_CODES = [
+  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH',
+  'EAI_AGAIN', 'EPIPE', 'ERR_SOCKET_CONNECTION_TIMEOUT', 'UND_ERR_SOCKET'
+];
+
+function describeNetError(err) {
+  if (!err) return 'unknown';
+  return (err.code || (err.cause && err.cause.code) || err.message || 'unknown');
+}
 
 /**
  * 解析 subscription-userinfo 响应头
@@ -39,25 +71,66 @@ function broadcast(type, payload) {
   }
 }
 
-function buildRequestConfig(sub) {
+function buildRequestConfig(sub, options) {
   const settings = db.getSettings();
   const ignoreTlsVerify = settings.ignoreTlsVerify !== false;
+  const forceIpv4 = !!(options && options.forceIpv4);
   const config = {
     timeout: 15000,
     headers: {
       'User-Agent': DEFAULT_USER_AGENT,
       'Accept': '*/*'
     },
-    responseType: 'text'
+    responseType: 'text',
+    // 不让 axios 自己吞掉底层错误码，下面要靠 code 判断是否做 IPv4 重试
+    validateStatus: null
   };
 
-  if (/^https:\/\//i.test(sub.url || '')) {
-    config.httpsAgent = new https.Agent({
-      rejectUnauthorized: !ignoreTlsVerify
-    });
+  const isHttps = /^https:\/\//i.test(sub.url || '');
+  if (isHttps) {
+    const agentOptions = { rejectUnauthorized: !ignoreTlsVerify };
+    if (forceIpv4) agentOptions.lookup = ipv4Lookup;
+    config.httpsAgent = new https.Agent(agentOptions);
+  } else if (forceIpv4) {
+    config.httpAgent = new http.Agent({ lookup: ipv4Lookup });
   }
 
   return config;
+}
+
+/**
+ * 拉取订阅内容：先按默认（IPv4 优先）请求，链路错误时强制 IPv4 重试一次。
+ * 只用链路错误触发重试，HTTP 401/403/404 之类直接把状态码抛回去，避免掩盖真实原因。
+ */
+async function requestSubscription(url, sub) {
+  const attempt = async (options) => {
+    const res = await axios.get(url, buildRequestConfig(sub, options));
+    if (res.status >= 400) {
+      const err = new Error(`订阅服务器返回 HTTP ${res.status}`);
+      err.httpStatus = res.status;
+      throw err;
+    }
+    return res;
+  };
+
+  try {
+    return await attempt();
+  } catch (err) {
+    const code = describeNetError(err);
+    const retriable = NET_ERROR_CODES.indexOf(code) !== -1 ||
+      /socket hang up|ECONNRESET|Client network socket disconnected/i.test(err.message || '');
+    if (!retriable) throw err;
+    console.warn(`[Fetcher] 首次请求失败（${code}），改用强制 IPv4 重试: ${url}`);
+    try {
+      const res = await attempt({ forceIpv4: true });
+      console.log(`[Fetcher] IPv4 重试成功: ${url}`);
+      return res;
+    } catch (err2) {
+      const code2 = describeNetError(err2);
+      if (err2.httpStatus) throw err2;
+      throw new Error(`订阅请求失败：${code2}（已尝试 IPv6/IPv4 双栈）`);
+    }
+  }
 }
 
 async function fetchSubscription(subId) {
@@ -81,7 +154,7 @@ async function fetchSubscription(subId) {
       } catch (e) {}
     }
 
-    const response = await axios.get(sub.url, buildRequestConfig(sub));
+    const response = await requestSubscription(sub.url, sub);
 
     const rawData = response.data;
     if (!rawData || typeof rawData !== 'string') {

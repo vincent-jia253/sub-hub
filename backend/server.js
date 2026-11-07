@@ -2,10 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const fs = require('fs');
+const dns = require('dns');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const yaml = require('yaml');
+
+// 出站统一走 IPv4 优先：本机到部分 Cloudflare 双栈域名的 IPv6 握手会被 RST，
+// 订阅行情/规则/更新检查都会因此报 ECONNRESET。纯 IPv6 域名不受影响（只有 AAAA 时仍走 IPv6）。
+try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
 const db = require('./db');
 const { parseUri, parseSubscriptionContent } = require('./parser');

@@ -284,7 +284,7 @@ class Database {
       return host;
     }
     try {
-      const lookupPromise = dns.lookup(host);
+      const lookupPromise = dns.lookup(host, { family: 4 }).catch(() => dns.lookup(host));
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('DNS lookup timeout')), 2500)
       );
