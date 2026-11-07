@@ -725,10 +725,12 @@ app.post('/api/system/config/import', authMiddleware, (req, res) => {
 const DIST_PATH = path.join(__dirname, '..', 'dist');
 if (fs.existsSync(DIST_PATH)) {
   app.use(express.static(DIST_PATH));
-  // SPA history fallback：/nodes、/settings 这类前端路由直接返回 index.html
+  // SPA history fallback：/nodes、/settings、/subscriptions 这类前端路由直接返回 index.html
+  const isReservedPath = p => ['/api', '/sub'].some(pre => p === pre || p.startsWith(pre + '/'));
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    if (req.path.startsWith('/api') || req.path.startsWith('/sub')) return next();
+    // 注意：必须按「路径段」判断，不能用 startsWith('/sub')，否则 /subscriptions 会被误放行成 404
+    if (isReservedPath(req.path)) return next();
     // 带扩展名的当成静态资源，缺失就让它 404，别把 HTML 当 JS/CSS 返回
     if (path.extname(req.path)) return next();
     const accept = req.headers.accept || '';
