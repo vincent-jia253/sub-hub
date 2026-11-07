@@ -258,6 +258,12 @@ class Database {
   extractHostFromUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') return '';
     let str = rawUrl.trim();
+    // 单节点链接（vless://uuid@host:port、ss://、vmess://…）不是 HTTP 地址，
+    // 硬拼 http:// 会把 host 解析成协议名（历史上 ip 字段被写成 "vless" 就是这个原因）。
+    // 这类链接没有可去重的 IP，返回空串，交回给「按完整 URL 去重」。
+    if (/^(vmess|vless|ss|ssr|trojan|trojan-go|hysteria2?|hy2|tuic|socks5?):\/\//i.test(str)) {
+      return '';
+    }
     if (!/^https?:\/\//i.test(str)) {
       str = 'http://' + str;
     }
@@ -445,17 +451,30 @@ class Database {
   }
 
   setSubscriptionNodes(subId, newNodes) {
+    const nodeKey = n => `${n.type}:${n.server}:${n.port}:${n.uuid || n.password || ''}`;
+    const prev = this.data.nodes.filter(n => n.subId === subId);
+    const prevById = new Map(prev.map(n => [n.id, n]));
+    const prevByKey = new Map(prev.map(n => [nodeKey(n), n]));
+
     // Remove existing nodes for this subId
     this.data.nodes = this.data.nodes.filter(n => n.subId !== subId);
     // Attach subId to new nodes
-    const prepared = newNodes.map(n => ({
-      ...n,
-      subId,
-      status: n.status || 'untested',
-      delay: n.delay || 0,
-      inCombinedSub: Boolean(n.inCombinedSub),
-      lastTestTime: n.lastTestTime || null
-    }));
+    // 防御：调用方没带 id（或换了 id）时，按「协议+服务器+端口+凭据」复用旧节点 id。
+    // 否则每次订阅刷新 id 全变，测速结果写不回、历史色块/前端选中态全部断链。
+    const prepared = newNodes.map(n => {
+      const reused = (n.id && prevById.get(n.id)) || prevByKey.get(nodeKey(n)) || null;
+      const id = (reused && reused.id) || n.id ||
+        `node-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      return {
+        ...n,
+        id,
+        subId,
+        status: n.status || 'untested',
+        delay: n.delay || 0,
+        inCombinedSub: Boolean(n.inCombinedSub),
+        lastTestTime: n.lastTestTime || null
+      };
+    });
     this.data.nodes.push(...prepared);
 
     // Update sub node count

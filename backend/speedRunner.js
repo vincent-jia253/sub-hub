@@ -96,12 +96,16 @@ function startSpeedTest({ ids, subId, scope, trigger = 'manual', durationMs, max
       const okCount = results.filter(r => r.speedStatus === 'ok').length;
       const best = results.filter(r => r.speedStatus === 'ok').sort((a, b) => b.speed - a.speed)[0];
       broadcast('test_completed', { taskId, kind: 'speed', trigger, results, count: results.length });
+      // 同时打到 stdout：docker logs 里能看到「开始 → 完成」成对出现，
+      // 不会再出现「只有开始没有完成」这种只能靠翻页面日志才能发现的静默失败
+      console.log(`[Speed] 网速测速完成：${results.length} 个节点，成功 ${okCount} 个${best ? `，最快 ${best.name} ${best.speed} Mbps` : ''}`);
       db.addLog('info', `完成 ${results.length} 个节点的网速测速（成功 ${okCount} 个${best ? `，最快 ${best.name} ${best.speed} Mbps` : ''}）`, {
         taskId,
         trigger
       });
     } catch (err) {
       broadcast('test_error', { taskId, kind: 'speed', trigger, error: err.message });
+      console.error(`[Speed] 网速测速异常: ${err.message}`);
       db.addLog('error', `网速测速异常: ${err.message}`, { taskId, trigger });
     }
   })();

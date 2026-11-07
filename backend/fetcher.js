@@ -16,19 +16,24 @@ const DEFAULT_USER_AGENT = 'ClashMeta/1.19.31 (Clash.Meta; Linux x86_64)';
  * 在 axios 里表现为 `read ECONNRESET`，页面上就是「订阅更新失败」。
  * 处理方式：
  *   1) 进程级默认改成 IPv4 优先（纯 IPv6 域名仍然能解析，因为那时只有 AAAA）；
- *   2) 万一仍然握手失败，自动用强制 IPv4 的 lookup 再试一次。
+ *   2) 链路层失败时依次强制 IPv4 → 强制 IPv6 再试，双栈任一条通就能拉到。
  * ------------------------------------------------------------------ */
 try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 
-function ipv4Lookup(hostname, options, callback) {
-  if (typeof options === 'function') {
-    callback = options;
-    options = {};
-  }
-  dns.lookup(hostname, Object.assign({}, options || {}, { family: 4 }), callback);
+function makeFamilyLookup(family) {
+  return function familyLookup(hostname, options, callback) {
+    if (typeof options === 'function') {
+      callback = options;
+      options = {};
+    }
+    dns.lookup(hostname, Object.assign({}, options || {}, { family }), callback);
+  };
 }
 
-// 只对「链路层」错误做 IPv4 重试；证书错误、404、401 等重试也没意义
+const ipv4Lookup = makeFamilyLookup(4);
+const ipv6Lookup = makeFamilyLookup(6);
+
+// 只对「链路层」错误做换栈重试；证书错误、401/403/404 重试没意义
 const NET_ERROR_CODES = [
   'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH',
   'EAI_AGAIN', 'EPIPE', 'ERR_SOCKET_CONNECTION_TIMEOUT', 'UND_ERR_SOCKET'
@@ -37,6 +42,17 @@ const NET_ERROR_CODES = [
 function describeNetError(err) {
   if (!err) return 'unknown';
   return (err.code || (err.cause && err.cause.code) || err.message || 'unknown');
+}
+
+// 单节点链接（不是订阅地址）的协议前缀；http/https 不在此列，那些是真订阅地址
+const NODE_LINK_SCHEMES = [
+  'vmess://', 'vless://', 'ss://', 'ssr://', 'trojan://', 'trojan-go://',
+  'hysteria://', 'hysteria2://', 'hy2://', 'tuic://', 'socks5://', 'socks://'
+];
+
+function isNodeLinkUrl(rawUrl) {
+  const s = String(rawUrl || '').trim().toLowerCase();
+  return NODE_LINK_SCHEMES.some(pre => s.startsWith(pre));
 }
 
 /**
@@ -74,7 +90,7 @@ function broadcast(type, payload) {
 function buildRequestConfig(sub, options) {
   const settings = db.getSettings();
   const ignoreTlsVerify = settings.ignoreTlsVerify !== false;
-  const forceIpv4 = !!(options && options.forceIpv4);
+  const forceFamily = options && options.forceFamily; // 4 | 6 | undefined
   const config = {
     timeout: 15000,
     headers: {
@@ -82,25 +98,26 @@ function buildRequestConfig(sub, options) {
       'Accept': '*/*'
     },
     responseType: 'text',
-    // 不让 axios 自己吞掉底层错误码，下面要靠 code 判断是否做 IPv4 重试
+    // 不让 axios 自己吞掉底层错误码，下面要靠 code 判断是否换栈重试
     validateStatus: null
   };
 
   const isHttps = /^https:\/\//i.test(sub.url || '');
+  const agentOptions = isHttps ? { rejectUnauthorized: !ignoreTlsVerify } : {};
+  if (forceFamily === 4) agentOptions.lookup = ipv4Lookup;
+  if (forceFamily === 6) agentOptions.lookup = ipv6Lookup;
   if (isHttps) {
-    const agentOptions = { rejectUnauthorized: !ignoreTlsVerify };
-    if (forceIpv4) agentOptions.lookup = ipv4Lookup;
     config.httpsAgent = new https.Agent(agentOptions);
-  } else if (forceIpv4) {
-    config.httpAgent = new http.Agent({ lookup: ipv4Lookup });
+  } else if (forceFamily) {
+    config.httpAgent = new http.Agent(agentOptions);
   }
 
   return config;
 }
 
 /**
- * 拉取订阅内容：先按默认（IPv4 优先）请求，链路错误时强制 IPv4 重试一次。
- * 只用链路错误触发重试，HTTP 401/403/404 之类直接把状态码抛回去，避免掩盖真实原因。
+ * 拉取订阅内容：默认（IPv4 优先）→ 强制 IPv4 → 强制 IPv6，逐级回退。
+ * 只有链路层错误才换栈重试；HTTP 401/403/404 之类直接把状态码抛回去，避免掩盖真实原因。
  */
 async function requestSubscription(url, sub) {
   const attempt = async (options) => {
@@ -113,23 +130,39 @@ async function requestSubscription(url, sub) {
     return res;
   };
 
+  const isNetError = (err) => {
+    const code = describeNetError(err);
+    return NET_ERROR_CODES.indexOf(code) !== -1 ||
+      /socket hang up|ECONNRESET|Client network socket disconnected|EPROTO|handshake/i.test(err.message || '');
+  };
+
+  const tried = [];
   try {
     return await attempt();
   } catch (err) {
-    const code = describeNetError(err);
-    const retriable = NET_ERROR_CODES.indexOf(code) !== -1 ||
-      /socket hang up|ECONNRESET|Client network socket disconnected/i.test(err.message || '');
-    if (!retriable) throw err;
-    console.warn(`[Fetcher] 首次请求失败（${code}），改用强制 IPv4 重试: ${url}`);
-    try {
-      const res = await attempt({ forceIpv4: true });
-      console.log(`[Fetcher] IPv4 重试成功: ${url}`);
-      return res;
-    } catch (err2) {
-      const code2 = describeNetError(err2);
-      if (err2.httpStatus) throw err2;
-      throw new Error(`订阅请求失败：${code2}（已尝试 IPv6/IPv4 双栈）`);
-    }
+    if (err.httpStatus || !isNetError(err)) throw err;
+    tried.push(describeNetError(err));
+    console.warn(`[Fetcher] 默认请求失败（${describeNetError(err)}），改用强制 IPv4 重试: ${url}`);
+  }
+
+  try {
+    const res = await attempt({ forceFamily: 4 });
+    console.log(`[Fetcher] 强制 IPv4 成功: ${url}`);
+    return res;
+  } catch (err) {
+    if (err.httpStatus || !isNetError(err)) throw err;
+    tried.push('IPv4:' + describeNetError(err));
+    console.warn(`[Fetcher] 强制 IPv4 也失败（${describeNetError(err)}），改用强制 IPv6 重试: ${url}`);
+  }
+
+  try {
+    const res = await attempt({ forceFamily: 6 });
+    console.log(`[Fetcher] 强制 IPv6 成功: ${url}`);
+    return res;
+  } catch (err) {
+    if (err.httpStatus || !isNetError(err)) throw err;
+    tried.push('IPv6:' + describeNetError(err));
+    throw new Error(`订阅请求失败：${tried.join(' / ')}（默认、IPv4、IPv6 三条路径均不可用）`);
   }
 }
 
@@ -154,17 +187,25 @@ async function fetchSubscription(subId) {
       } catch (e) {}
     }
 
-    const response = await requestSubscription(sub.url, sub);
-
-    const rawData = response.data;
-    if (!rawData || typeof rawData !== 'string') {
-      throw new Error('订阅内容为空或返回格式不正确');
+    // 单节点链接（vless:// vmess:// ss:// trojan:// …）当订阅存时不需要 HTTP：
+    // 直接把链接本身当内容交给解析器，否则 axios 会抛 Unsupported protocol vless:
+    const isStaticLink = isNodeLinkUrl(sub.url);
+    let rawData;
+    let response = null;
+    if (isStaticLink) {
+      rawData = sub.url;
+    } else {
+      response = await requestSubscription(sub.url, sub);
+      rawData = response && response.data;
+      if (!rawData || typeof rawData !== 'string') {
+        throw new Error('订阅内容为空或返回格式不正确');
+      }
     }
 
     // 解析机场流量信息（subscription-userinfo: upload=..; download=..; total=..; expire=..）
-    const subUserinfo = parseSubscriptionUserinfo(
+    const subUserinfo = response ? parseSubscriptionUserinfo(
       response.headers && (response.headers['subscription-userinfo'] || response.headers['Subscription-Userinfo'])
-    );
+    ) : null;
     if (subUserinfo) {
       db.updateSubscription(subId, { userInfo: subUserinfo });
     }
@@ -249,6 +290,16 @@ async function fetchSubscription(subId) {
     });
 
     db.setSubscriptionNodes(subId, mergedNodes);
+    // 可观测性：如果本次刷新里大多是「全新节点」，说明这个机场是动态池（每次返回不同 IP/协议），
+    // 节点 id 和历史天然无法延续——日志里点名，避免以后又误判成 id 漂移 bug
+    if (mergedNodes.length > 0) {
+      const keptIds = new Set(existingNodes.map(n => n.id));
+      const reused = mergedNodes.filter(n => keptIds.has(n.id)).length;
+      const freshRatio = 1 - reused / mergedNodes.length;
+      if (freshRatio >= 0.5) {
+        console.warn(`[Fetcher] 订阅 [${sub.name}] 节点大换血：${mergedNodes.length} 个节点中 ${mergedNodes.length - reused} 个是新节点（${Math.round(freshRatio * 100)}%），疑似动态池，节点历史将重置`);
+      }
+    }
     const updatedSub = db.updateSubscription(subId, {
       nodeCount: mergedNodes.length,
       lastStatus: 'updating',
