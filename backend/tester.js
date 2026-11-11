@@ -4,6 +4,7 @@ const http = require('http');
 const net = require('net');
 const { spawn } = require('child_process');
 const yaml = require('yaml');
+const { applyMihomoCompat } = require('./mihomoCompat');
 
 class MihomoTester {
   constructor() {
@@ -86,7 +87,8 @@ class MihomoTester {
     // Ensure alterId is int if vmess
     if (p.alterId !== undefined) p.alterId = parseInt(p.alterId, 10);
 
-    return p;
+    // REALITY 节点补 support-x25519mlkem768，否则连 Xray 25.x+ 服务端会认证失败
+    return applyMihomoCompat(p);
   }
 
   ensureUniqueNodeNames(nodes) {

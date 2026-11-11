@@ -4,6 +4,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const { applyAutoSelectExclude } = require('./local-overrides');
+const { applyMihomoCompat } = require('./mihomoCompat');
 
 // Rule-providers definitions based on Loyalsoldier/clash-rules
 const DEFAULT_LOYAL_RULE_PROVIDERS = (baseUrl) => ({
@@ -209,7 +210,8 @@ function generateClashSubscription(rawNodes, profile = {}) {
     delete p.checked;
     if (p.port) p.port = parseInt(p.port, 10);
     if (p.alterId !== undefined) p.alterId = parseInt(p.alterId, 10);
-    return p;
+    // REALITY 节点补 support-x25519mlkem768（见 backend/mihomoCompat.js 里的说明）
+    return applyMihomoCompat(p);
   });
 
   const baseUrl = (profile.ruleProviderUrl || 'https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release').replace(/\/+$/, '');

@@ -1,4 +1,9 @@
 # Multi-stage build
+# mihomo 内核：v1.19.0 不支持 REALITY 的后量子混合密钥（X25519MLKEM768），
+# 连 Xray 25.x+ 的服务端会一直 REALITY authentication failed。
+# 直接取官方镜像里的二进制，比在构建时 curl GitHub 稳（国内经常 37MB 拉不动）。
+FROM metacubex/mihomo:v1.19.34 AS mihomo-bin
+
 FROM node:20-slim AS builder
 
 WORKDIR /app
@@ -19,17 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates tzdata gzip bash \
     && rm -rf /var/lib/apt/lists/*
 
-# Download Mihomo Linux binary (compatible with v1/v2/v3 AMD64 microarchitecture & ARM64)
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then TARGET="amd64-compatible"; \
-    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then TARGET="arm64"; \
-    else TARGET="amd64-compatible"; fi && \
-    echo "Downloading Mihomo for architecture: $TARGET ($ARCH)..." && \
-    (curl -sL "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz" -o /tmp/mihomo.gz || \
-     curl -sL "https://ghfast.top/https://github.com/MetaCubeX/mihomo/releases/download/v1.19.0/mihomo-linux-${TARGET}-v1.19.0.gz" -o /tmp/mihomo.gz) && \
-    gzip -d /tmp/mihomo.gz && \
-    chmod 755 /tmp/mihomo && \
-    mv /tmp/mihomo /usr/local/bin/mihomo && \
+# Mihomo 内核：直接从官方镜像拷二进制（v1.19.34，支持 REALITY X25519MLKEM768）
+# 官方镜像同时提供 amd64 / arm64 版本，构建时按目标架构由 Docker 自动选择
+COPY --from=mihomo-bin /mihomo /usr/local/bin/mihomo
+RUN chmod 755 /usr/local/bin/mihomo && \
     cp /usr/local/bin/mihomo /app/mihomo && \
     chmod 755 /app/mihomo && \
     /usr/local/bin/mihomo -v
