@@ -429,82 +429,82 @@ app.post('/api/nodes/parse-raw', authMiddleware, (req, res) => {
   res.json({ nodes, count: nodes.length });
 });
 
-// Import pasted nodes directly
+// Import pasted nodes directly —— 直接进节点池（subId='manual'），不再伪造 manual:// 订阅
 app.post('/api/nodes/import-raw', authMiddleware, (req, res) => {
-  const { rawText, subName } = req.body;
+  const { rawText } = req.body;
   if (!rawText) return res.status(400).json({ error: '内容不能为空' });
 
-  const nodes = parseSubscriptionContent(rawText, yaml);
-  if (nodes.length === 0) {
+  let nodes = [];
+  try {
+    nodes = parseSubscriptionContent(rawText, yaml);
+  } catch (e) {
+    return res.status(400).json({ error: '解析失败: ' + e.message });
+  }
+  if (!nodes || nodes.length === 0) {
     return res.status(400).json({ error: '未能识别出任何有效节点' });
   }
 
-  // Create as manual subscription or add directly
-  const finalSubName = (subName && subName.trim()) ? subName.trim() : db.getNextSubName();
-  const sub = db.addSubscription({
-    name: finalSubName,
-    url: 'manual://' + Date.now(),
-    autoRefresh: false
+  // 去重：同 协议+服务器+端口+凭据 已在节点池里的直接跳过
+  const keyOf = n => `${n.type}:${n.server}:${n.port}:${n.uuid || n.password || ''}`;
+  const existingKeys = new Set(db.getNodes().map(keyOf));
+  const toAdd = [];
+  let skipped = 0;
+  nodes.forEach(n => {
+    const k = keyOf(n);
+    if (existingKeys.has(k)) { skipped++; return; }
+    existingKeys.add(k);
+    toAdd.push(n);
   });
 
-  db.setSubscriptionNodes(sub.id, nodes);
-  const updatedSub = db.updateSubscription(sub.id, {
-    nodeCount: nodes.length,
-    lastStatus: 'updating',
-    lastMessage: `已导入 ${nodes.length} 个节点，正在自动测速...`
-  });
-  broadcast('subscription_updated', { id: sub.id, sub: updatedSub });
+  const added = toAdd.map(n => db.addManualNode({ ...n, subId: 'manual' }));
+  db.addLog('info', `手动添加节点 ${added.length} 个${skipped ? `（跳过重复 ${skipped} 个）` : ''}，已直接进入节点池`);
+  broadcast('nodes_updated', { count: added.length });
 
-  // 导入订阅后，自动测试节点延迟：成功则加入整合订阅，失败则不加入
+  if (added.length === 0) {
+    return res.json({ added: 0, skipped, nodes: [], message: '节点已存在，未重复添加' });
+  }
+
+  // 新增节点自动测一次延迟：成功的自动纳入整合订阅
   setTimeout(async () => {
     try {
-      const freshNodes = db.getNodes({ subId: sub.id });
-      if (!freshNodes || freshNodes.length === 0) return;
       const settings = db.getSettings();
-      const taskId = 'autotest_' + sub.id + '_' + Date.now().toString(36);
-
+      const ids = added.map(n => n.id);
+      const taskId = 'autotest_manual_' + Date.now().toString(36);
       broadcast('test_started', {
         taskId,
-        subId: sub.id,
-        title: `自动测速: ${sub.name}`,
-        total: freshNodes.length,
-        nodeNames: freshNodes.map(n => n.name)
+        title: `自动测速: 新增 ${added.length} 个节点`,
+        total: added.length,
+        nodeNames: added.map(n => n.name)
       });
-
-      const testResults = await tester.testNodes(freshNodes, {
+      const fresh = db.getNodes().filter(n => ids.includes(n.id));
+      const testResults = await tester.testNodes(fresh, {
         taskId,
         testUrl: settings.testUrl,
         timeout: settings.testTimeout,
         concurrency: settings.testConcurrency,
         maxRetries: 2,
-        onProgress: (progress) => {
-          broadcast('test_progress', { taskId, subId: sub.id, ...progress });
-        }
+        onProgress: (progress) => broadcast('test_progress', { taskId, ...progress })
       });
-
       db.updateNodesBatch(testResults);
       const aliveCount = testResults.filter(r => r.inCombinedSub).length;
-      const finalSub = db.updateSubscription(sub.id, {
-        nodeCount: freshNodes.length,
-        aliveCount,
-        lastUpdate: new Date().toISOString(),
-        lastStatus: 'success',
-        lastMessage: `同步完成：共 ${freshNodes.length} 节点，${aliveCount} 个可用`
-      });
-      db.addLog('info', `手动导入 [${sub.name}] 自动测试完毕：${aliveCount} 个可用节点已自动纳入整合订阅`, { subId: sub.id, aliveCount });
-      broadcast('test_completed', { taskId, subId: sub.id, results: testResults, count: testResults.length });
-      broadcast('subscription_updated', { id: sub.id, sub: finalSub });
+      db.addLog('info', `手动添加节点自动测速完毕：${aliveCount}/${added.length} 个可用并已纳入整合订阅`);
+      broadcast('test_completed', { taskId, results: testResults, count: testResults.length });
     } catch (e) {
       console.error('[Manual Import] Auto test error:', e.message);
-      const fallbackSub = db.updateSubscription(sub.id, {
-        lastStatus: 'success',
-        lastMessage: `已导入 ${nodes.length} 个节点 (自动测速异常: ${e.message})`
-      });
-      broadcast('subscription_updated', { id: sub.id, sub: fallbackSub });
+      db.addLog('error', `手动添加节点自动测速异常: ${e.message}`);
     }
   }, 300);
 
-  res.json({ subId: sub.id, count: nodes.length });
+  res.json({ added: added.length, skipped, nodes: added });
+});
+
+// Copy a single node as a share link (vless:// / vmess:// / …)
+app.get('/api/nodes/:id/link', authMiddleware, (req, res) => {
+  const node = db.getNode(req.params.id);
+  if (!node) return res.status(404).json({ error: '节点不存在' });
+  const link = generator.buildNodeLink(node);
+  if (!link) return res.status(400).json({ error: `暂不支持复制该协议: ${node.type}` });
+  res.json({ id: node.id, name: node.name, type: node.type, link });
 });
 
 // Nodes Management

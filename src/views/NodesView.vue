@@ -305,6 +305,9 @@
             <button class="action-btn" title="清空该节点的延迟与网速结果" @click="clearNodeResults(node)">
               <Eraser :size="15" />
             </button>
+            <button class="action-btn" :title="copiedNodeId === node.id ? '已复制分享链接' : '复制节点分享链接（vless:// 等）'" @click="copyNodeLink(node)">
+              <Copy :size="15" :class="copiedNodeId === node.id ? 'text-primary' : ''" />
+            </button>
             <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
               <Edit3 :size="15" />
             </button>
@@ -448,6 +451,9 @@
                   </button>
                   <button class="action-btn" title="清空该节点的延迟与网速结果" @click="clearNodeResults(node)">
                     <Eraser :size="14" />
+                  </button>
+                  <button class="action-btn" :title="copiedNodeId === node.id ? '已复制分享链接' : '复制节点分享链接（vless:// 等）'" @click="copyNodeLink(node)">
+                    <Copy :size="14" :class="copiedNodeId === node.id ? 'text-primary' : ''" />
                   </button>
                   <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
                     <Edit3 :size="14" />
@@ -606,6 +612,7 @@ import {
   X
 } from 'lucide-vue-next';
 import api from '../api';
+import { copyToClipboard } from '../utils/clipboard';
 import NodeDetailModal from '../components/NodeDetailModal.vue';
 
 const props = defineProps({
@@ -1237,6 +1244,24 @@ const deleteNode = async (node) => {
     emit('data-changed');
   } catch (e) {
     alert('删除失败: ' + e.message);
+  }
+};
+
+/* ---------------- 复制节点分享链接 ---------------- */
+const copiedNodeId = ref('');
+const copyNodeLink = async (node) => {
+  try {
+    const res = await api.get(`/nodes/${node.id}/link`);
+    const link = res && res.link;
+    if (!link) throw new Error('该节点无法生成分享链接');
+    const ok = await copyToClipboard(link);
+    if (!ok) throw new Error('复制失败');
+    copiedNodeId.value = node.id;
+    setTimeout(() => {
+      if (copiedNodeId.value === node.id) copiedNodeId.value = '';
+    }, 1600);
+  } catch (e) {
+    alert('复制节点链接失败: ' + (e.message || e));
   }
 };
 

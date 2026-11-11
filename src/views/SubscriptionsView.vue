@@ -38,7 +38,7 @@
 
         <button class="btn btn-secondary" @click="showRawModal = true">
           <Upload :size="16" />
-          <span>直接粘贴节点导入</span>
+          <span>添加节点（粘贴链接）</span>
         </button>
         <button class="btn btn-primary" @click="openAddModal">
           <Plus :size="16" />
@@ -363,14 +363,14 @@
     <div v-if="showRawModal" class="modal-backdrop" @click.self="showRawModal = false">
       <div class="modal-card glass modal-lg">
         <div class="modal-header">
-          <h3>直接粘贴节点或配置导入</h3>
+          <h3>添加独立节点（直接进节点池）</h3>
           <button class="modal-close" @click="showRawModal = false">×</button>
         </div>
 
         <form @submit.prevent="submitRawImport" class="modal-body">
-          <div class="form-group">
-            <label>保存分组名称 (留空自动命名为 sub-1, sub-2...)</label>
-            <input v-model="rawForm.name" type="text" placeholder="留空则自动分配名称如 sub-1" />
+          <div class="modal-hint">
+            粘贴单节点链接或 Clash YAML 的 <code>proxies:</code> 片段，节点会直接加入节点池（<b>不会生成订阅条目</b>），
+            并自动测一次延迟；每个节点都可以在「节点池与测速」里单独复制分享链接。
           </div>
 
           <div class="form-group">
@@ -388,11 +388,15 @@
             <span>{{ rawError }}</span>
           </div>
 
+          <div v-if="rawResult" class="raw-result">
+            <span>{{ rawResult }}</span>
+          </div>
+
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" @click="showRawModal = false">取消</button>
             <button type="submit" class="btn btn-primary" :disabled="submittingRaw">
               <Loader2 v-if="submittingRaw" class="animate-spin" :size="16" />
-              <span>{{ submittingRaw ? '识别并导入中...' : '识别并导入' }}</span>
+              <span>{{ submittingRaw ? '识别并导入中...' : '识别并导入节点池' }}</span>
             </button>
           </div>
         </form>
@@ -462,6 +466,7 @@ const form = reactive({
 const showRawModal = ref(false);
 const submittingRaw = ref(false);
 const rawError = ref('');
+const rawResult = ref('');
 const rawForm = reactive({
   name: '',
   rawText: ''
@@ -614,16 +619,16 @@ const submitSubForm = async () => {
 
 const submitRawImport = async () => {
   rawError.value = '';
+  rawResult.value = '';
   submittingRaw.value = true;
   try {
-    await api.post('/nodes/import-raw', {
-      rawText: rawForm.rawText,
-      subName: rawForm.name
-    });
-    showRawModal.value = false;
+    const res = await api.post('/nodes/import-raw', { rawText: rawForm.rawText });
+    const added = res.added ?? res.count ?? 0;
+    const skipped = res.skipped || 0;
+    rawResult.value = `已加入节点池 ${added} 个节点${skipped ? `（跳过重复 ${skipped} 个）` : ''}，正在自动测延迟`;
     rawForm.rawText = '';
-    await fetchSubs();
     emit('data-changed');
+    setTimeout(() => { showRawModal.value = false; rawResult.value = ''; }, 1600);
   } catch (err) {
     rawError.value = err.message || '解析失败，请检查输入内容';
   } finally {
@@ -1185,6 +1190,31 @@ input:checked + .slider:before {
   color: #ef4444;
   font-size: 12px;
   background: rgba(239, 68, 68, 0.1);
+  padding: 10px 14px;
+  border-radius: 6px;
+}
+
+.modal-hint {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  background: rgba(99, 102, 241, 0.08);
+  border-left: 3px solid rgba(99, 102, 241, 0.6);
+  padding: 10px 14px;
+  border-radius: 6px;
+}
+
+.modal-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.raw-result {
+  font-size: 12px;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
   padding: 10px 14px;
   border-radius: 6px;
 }

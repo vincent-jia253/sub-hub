@@ -327,66 +327,87 @@ function generateClashSubscription(rawNodes, profile = {}) {
 /**
  * Generate Base64 plain nodes subscription (for v2rayN, Shadowrocket, etc.)
  */
-function generateBase64Subscription(nodes) {
-  const lines = [];
-  // IPv6 地址在分享链接里必须加方括号，否则客户端无法区分地址和端口
-  const hostOf = (node) => {
-    const host = String(node.server || '');
-    if (host.includes(':') && !host.startsWith('[')) return `[${host}]`;
-    return host;
-  };
+// IPv6 地址在分享链接里必须加方括号，否则客户端无法区分地址和端口
+function hostOf(node) {
+  const host = String(node.server || '');
+  if (host.includes(':') && !host.startsWith('[')) return `[${host}]`;
+  return host;
+}
 
-  for (const node of nodes) {
-    try {
-      if (node.type === 'ss') {
-        const userinfo = Buffer.from(`${node.cipher}:${node.password}`).toString('base64');
-        const encodedName = encodeURIComponent(node.name || 'SS');
-        lines.push(`ss://${userinfo}@${hostOf(node)}:${node.port}#${encodedName}`);
-      } else if (node.type === 'vmess') {
-        const vmessObj = {
-          v: '2',
-          ps: node.name,
-          add: node.server,
-          port: node.port,
-          id: node.uuid,
-          aid: node.alterId || 0,
-          scy: node.cipher || 'auto',
-          net: node.network || 'tcp',
-          type: 'none',
-          host: node['ws-opts']?.headers?.Host || '',
-          path: node['ws-opts']?.path || '',
-          tls: node.tls ? 'tls' : '',
-          sni: node.servername || ''
-        };
-        lines.push(`vmess://${Buffer.from(JSON.stringify(vmessObj)).toString('base64')}`);
-      } else if (node.type === 'trojan') {
-        const params = new URLSearchParams();
-        if (node.sni) params.set('sni', node.sni);
-        if (node.network) params.set('type', node.network);
-        lines.push(`trojan://${encodeURIComponent(node.password)}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
-      } else if (node.type === 'vless') {
-        const params = new URLSearchParams();
-        if (node.tls) params.set('security', node['reality-opts'] ? 'reality' : 'tls');
-        if (node.flow) params.set('flow', node.flow);
-        if (node.network) params.set('type', node.network);
-        if (node['ws-opts']?.path) params.set('path', node['ws-opts'].path);
-        if (node['ws-opts']?.headers?.Host) params.set('host', node['ws-opts'].headers.Host);
-        if (node['reality-opts']?.['public-key']) params.set('pbk', node['reality-opts']['public-key']);
-        if (node['reality-opts']?.['short-id']) params.set('sid', node['reality-opts']['short-id']);
-        if (node.servername) params.set('sni', node.servername);
-        if (node['client-fingerprint']) params.set('fp', node['client-fingerprint']);
-        if (node['skip-cert-verify'] === true) params.set('allowInsecure', '1');
-        lines.push(`vless://${node.uuid}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
-      } else if (node.type === 'hysteria2') {
-        const params = new URLSearchParams();
-        if (node.sni) params.set('sni', node.sni);
-        if (node.obfs) params.set('obfs', node.obfs);
-        if (node['obfs-password']) params.set('obfs-password', node['obfs-password']);
-        lines.push(`hysteria2://${encodeURIComponent(node.password || node.auth)}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`);
-      }
-    } catch (e) {}
+/**
+ * 把单个节点还原成分享链接（vless:// / vmess:// / ss:// / trojan:// / hysteria2://）
+ * 节点列表的「复制链接」走这里，保证复制出来的链接和导出订阅里的一致
+ */
+function buildNodeLink(node) {
+  if (!node || !node.type) return null;
+  try {
+    if (node.type === 'ss') {
+      const userinfo = Buffer.from(`${node.cipher}:${node.password}`).toString('base64');
+      return `ss://${userinfo}@${hostOf(node)}:${node.port}#${encodeURIComponent(node.name || 'SS')}`;
+    }
+    if (node.type === 'vmess') {
+      const vmessObj = {
+        v: '2',
+        ps: node.name,
+        add: node.server,
+        port: node.port,
+        id: node.uuid,
+        aid: node.alterId || 0,
+        scy: node.cipher || 'auto',
+        net: node.network || 'tcp',
+        type: 'none',
+        host: node['ws-opts']?.headers?.Host || '',
+        path: node['ws-opts']?.path || '',
+        tls: node.tls ? 'tls' : '',
+        sni: node.servername || ''
+      };
+      return `vmess://${Buffer.from(JSON.stringify(vmessObj)).toString('base64')}`;
+    }
+    if (node.type === 'trojan') {
+      const params = new URLSearchParams();
+      if (node.sni) params.set('sni', node.sni);
+      if (node.network) params.set('type', node.network);
+      if (node['skip-cert-verify'] === true) params.set('allowInsecure', '1');
+      return `trojan://${encodeURIComponent(node.password)}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name || 'Trojan')}`;
+    }
+    if (node.type === 'vless') {
+      const params = new URLSearchParams();
+      params.set('encryption', 'none');
+      if (node.tls) params.set('security', node['reality-opts'] ? 'reality' : 'tls');
+      if (node.flow) params.set('flow', node.flow);
+      if (node.network) params.set('type', node.network);
+      if (node['ws-opts']?.path) params.set('path', node['ws-opts'].path);
+      if (node['ws-opts']?.headers?.Host) params.set('host', node['ws-opts'].headers.Host);
+      if (node['reality-opts']?.['public-key']) params.set('pbk', node['reality-opts']['public-key']);
+      if (node['reality-opts']?.['short-id']) params.set('sid', node['reality-opts']['short-id']);
+      if (node.servername) params.set('sni', node.servername);
+      if (node['client-fingerprint']) params.set('fp', node['client-fingerprint']);
+      if (node['skip-cert-verify'] === true) params.set('allowInsecure', '1');
+      return `vless://${node.uuid}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name || 'VLESS')}`;
+    }
+    if (node.type === 'hysteria2' || node.type === 'hy2') {
+      const params = new URLSearchParams();
+      if (node.sni) params.set('sni', node.sni);
+      if (node.obfs) params.set('obfs', node.obfs);
+      if (node['obfs-password']) params.set('obfs-password', node['obfs-password']);
+      if (node['skip-cert-verify'] === true) params.set('insecure', '1');
+      return `hysteria2://${encodeURIComponent(node.password || node.auth || '')}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name || 'HY2')}`;
+    }
+    if (node.type === 'tuic') {
+      const params = new URLSearchParams();
+      if (node.sni) params.set('sni', node.sni);
+      if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
+      if (node['skip-cert-verify'] === true) params.set('allow_insecure', '1');
+      return `tuic://${encodeURIComponent(node.uuid || '')}:${encodeURIComponent(node.password || '')}@${hostOf(node)}:${node.port}?${params.toString()}#${encodeURIComponent(node.name || 'TUIC')}`;
+    }
+  } catch (e) {
+    return null;
   }
+  return null;
+}
 
+function generateBase64Subscription(nodes) {
+  const lines = nodes.map(buildNodeLink).filter(Boolean);
   return Buffer.from(lines.join('\n')).toString('base64');
 }
 
@@ -476,5 +497,6 @@ function loadCustomConfig() {
 module.exports = {
   filterNodes,
   generateClashSubscription,
-  generateBase64Subscription
+  generateBase64Subscription,
+  buildNodeLink
 };
