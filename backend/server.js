@@ -507,6 +507,23 @@ app.get('/api/nodes/:id/link', authMiddleware, (req, res) => {
   res.json({ id: node.id, name: node.name, type: node.type, link });
 });
 
+// 诊断单节点「为什么测不出延迟」：跑一次 debug 级探测，返回可读原因
+app.post('/api/nodes/:id/diagnose', authMiddleware, async (req, res) => {
+  const node = db.getNode(req.params.id);
+  if (!node) return res.status(404).json({ error: '节点不存在' });
+  try {
+    const settings = db.getSettings();
+    const result = await tester.diagnoseNode(node, {
+      testUrl: (req.body && req.body.testUrl) || settings.testUrl,
+      timeout: Number(req.body && req.body.timeout) || 6000
+    });
+    db.addLog(result.ok ? 'info' : 'warn', `诊断节点 [${node.name}]：${result.reason}`);
+    res.json({ nodeId: node.id, name: node.name, ...result });
+  } catch (e) {
+    res.status(500).json({ error: '诊断失败: ' + e.message });
+  }
+});
+
 // Nodes Management
 app.get('/api/nodes', authMiddleware, (req, res) => {
   const { subId, protocol, status, keyword, inCombinedSub } = req.query;

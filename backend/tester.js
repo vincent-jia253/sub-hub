@@ -423,6 +423,108 @@ class MihomoTester {
       await this.stopMihomoTask(currentTaskId);
     }
   }
+
+  /**
+   * 单节点连通性诊断：用 debug 日志跑一次延迟探测，把「失败原因」翻译成人话。
+   * 用于「测不出延迟」时定位卡在哪一层（DNS / TCP / TLS / REALITY 认证 / 目标站点）。
+   */
+  async diagnoseNode(node, { testUrl = 'http://www.gstatic.com/generate_204', timeout = 6000 } = {}) {
+    const apiPort = await this.getFreePort();
+    const secret = 'diag_' + Math.random().toString(36).slice(2, 8);
+    const proxyName = 'diagnose-target';
+    const dir = '/tmp/sub_temp_mihomo';
+    const configFile = path.join(dir, `diag_${Date.now()}.yaml`);
+    fs.mkdirSync(dir, { recursive: true });
+
+    const proxy = this.cleanProxyForMihomo({ ...node, name: proxyName });
+    const configData = {
+      'mixed-port': 0,
+      'allow-lan': false,
+      mode: 'rule',
+      'log-level': 'debug',
+      'external-controller': `127.0.0.1:${apiPort}`,
+      secret,
+      proxies: [proxy],
+      rules: ['MATCH,DIRECT']
+    };
+    fs.writeFileSync(configFile, yaml.stringify(configData), 'utf8');
+
+    const lines = [];
+    let proc = null;
+    try {
+      proc = spawn(this.mihomoBinary, ['-d', dir, '-f', configFile]);
+      const collect = d => {
+        String(d).split('\n').forEach(l => {
+          const t = l.trim();
+          if (t) lines.push(t);
+        });
+        if (lines.length > 400) lines.splice(0, lines.length - 400);
+      };
+      proc.stdout.on('data', collect);
+      proc.stderr.on('data', collect);
+
+      const deadline = Date.now() + 8000;
+      let ready = false;
+      while (Date.now() < deadline) {
+        if (await this.pingApi(apiPort, secret)) { ready = true; break; }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (!ready) {
+        return { ok: false, delay: -1, reason: 'Mihomo 内核未能启动（生成的配置可能被拒绝）', detail: lines.slice(-12) };
+      }
+
+      const delay = await this.testSingleProxyDelay(proxyName, testUrl, timeout, apiPort, secret);
+      await new Promise(r => setTimeout(r, 600));
+
+      if (delay > 0) {
+        return { ok: true, delay, reason: `连通正常 (${delay} ms)`, detail: lines.slice(-8) };
+      }
+      const interesting = lines.filter(l => /error|warning|REALITY|fail|refused|timeout|unreachable/i.test(l));
+      return {
+        ok: false,
+        delay,
+        reason: this.explainMihomoLogs(lines),
+        detail: (interesting.length ? interesting : lines).slice(-10)
+      };
+    } catch (e) {
+      return { ok: false, delay: -1, reason: '诊断异常: ' + e.message, detail: lines.slice(-12) };
+    } finally {
+      if (proc) {
+        try { proc.kill('SIGKILL'); } catch (e) {}
+      }
+      try { if (fs.existsSync(configFile)) fs.unlinkSync(configFile); } catch (e) {}
+    }
+  }
+
+  /**
+   * 把 mihomo 日志行翻译成一句能看懂的原因
+   */
+  explainMihomoLogs(lines) {
+    const blob = lines.join('\n');
+    // mihomo 打的是 "REALITY Authentication: false"，部分版本是 "REALITY authentication failed"
+    if (/REALITY\s+authentication/i.test(blob)) {
+      return 'REALITY 认证失败：public-key(pbk) / short-id(sid) / SNI 与服务器不一致，或服务器换过密钥后链接没更新';
+    }
+    if (/connection refused/i.test(blob)) {
+      return '端口拒绝连接：服务器上没有服务监听该端口';
+    }
+    if (/no route to host|network is unreachable/i.test(blob)) {
+      return '网络不可达：该 IP/端口被防火墙或运营商拦截';
+    }
+    if (/x509|certificate|tls:/i.test(blob)) {
+      return 'TLS 握手/证书异常：可能把 REALITY 当成普通 TLS（或反之）配置错了';
+    }
+    if (/invalid user|authentication failed/i.test(blob)) {
+      return '身份校验失败：uuid / password 与服务器不一致';
+    }
+    if (/no such host/i.test(blob)) {
+      return '域名解析失败：服务器地址写错或本机 DNS 异常';
+    }
+    if (/i\/o timeout|context deadline exceeded|timeout/i.test(blob)) {
+      return '连接超时：TCP 能到但握手无响应（端口被墙 / 参数不对导致服务端静默丢弃）';
+    }
+    return '探测超时且内核日志里没有明确错误，可换个测试地址再试';
+  }
 }
 
 module.exports = new MihomoTester();

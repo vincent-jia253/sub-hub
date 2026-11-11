@@ -308,6 +308,9 @@
             <button class="action-btn" :title="copiedNodeId === node.id ? '已复制分享链接' : '复制节点分享链接（vless:// 等）'" @click="copyNodeLink(node)">
               <Copy :size="15" :class="copiedNodeId === node.id ? 'text-primary' : ''" />
             </button>
+            <button class="action-btn" title="诊断为什么测不出延迟（读内核日志给出原因）" :disabled="diagnosingNodeId === node.id" @click="diagnoseNode(node)">
+              <Activity :size="15" :class="diagnosingNodeId === node.id ? 'animate-pulse text-primary' : ''" />
+            </button>
             <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
               <Edit3 :size="15" />
             </button>
@@ -454,6 +457,9 @@
                   </button>
                   <button class="action-btn" :title="copiedNodeId === node.id ? '已复制分享链接' : '复制节点分享链接（vless:// 等）'" @click="copyNodeLink(node)">
                     <Copy :size="14" :class="copiedNodeId === node.id ? 'text-primary' : ''" />
+                  </button>
+                  <button class="action-btn" title="诊断为什么测不出延迟（读内核日志给出原因）" :disabled="diagnosingNodeId === node.id" @click="diagnoseNode(node)">
+                    <Activity :size="14" :class="diagnosingNodeId === node.id ? 'animate-pulse text-primary' : ''" />
                   </button>
                   <button class="action-btn" title="编辑节点" @click="openEditNode(node)">
                     <Edit3 :size="14" />
@@ -1262,6 +1268,24 @@ const copyNodeLink = async (node) => {
     }, 1600);
   } catch (e) {
     alert('复制节点链接失败: ' + (e.message || e));
+  }
+};
+
+/* ---------------- 诊断节点失败原因 ---------------- */
+const diagnosingNodeId = ref('');
+const diagnoseNode = async (node) => {
+  diagnosingNodeId.value = node.id;
+  try {
+    const r = await api.post(`/nodes/${node.id}/diagnose`, {});
+    const head = r.ok ? `✓ 连通正常：${r.delay} ms` : `✗ ${r.reason}`;
+    const tail = Array.isArray(r.detail) && r.detail.length
+      ? '\n\n— 内核日志（尾部）—\n' + r.detail.slice(-8).join('\n')
+      : '';
+    alert(`【${node.name}】\n${head}${tail}`);
+  } catch (e) {
+    alert('诊断失败: ' + (e.message || e));
+  } finally {
+    diagnosingNodeId.value = '';
   }
 };
 
