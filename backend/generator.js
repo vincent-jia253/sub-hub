@@ -259,6 +259,8 @@ function generateClashSubscription(rawNodes, profile = {}) {
     'allow-lan': true,
     mode: 'rule',
     'log-level': 'info',
+    // 统一延迟口径：客户端显示/测速都按单程 RTT 算，避免各家数字对不上
+    'unified-delay': true,
     'external-controller': '127.0.0.1:9090',
     dns: {
       enable: true,

@@ -151,6 +151,10 @@ class MihomoTester {
       'mixed-port': mixedPort, // 0 = 只开 API（纯延迟探测）；>0 = 同时开本地代理端口（带宽测速需要真实出流量）
       'allow-lan': false,
       mode: mode, // 'rule' 用于延迟探测；'global' 用于带宽测速（通过切换 GLOBAL 选择器逐节点下载）
+      // unified-delay：让 /proxies/{name}/delay 返回「单程 RTT 口径」而不是「TCP+TLS+HTTP 三个往返」。
+      // 不开的话，一个 RTT≈89ms 的节点会被测成 280ms 左右，看起来像节点很慢，
+      // 而客户端（Clash Verge / FlClash 默认开 unified-delay）显示的只有 ~90ms，两边对不上。
+      'unified-delay': true,
       'log-level': 'warning',
       'external-controller': `127.0.0.1:${apiPort}`,
       secret: secret,
@@ -439,17 +443,18 @@ class MihomoTester {
     fs.mkdirSync(dir, { recursive: true });
 
     const proxy = this.cleanProxyForMihomo({ ...node, name: proxyName });
-    const configData = {
+    const probeConfig = {
       'mixed-port': 0,
       'allow-lan': false,
       mode: 'rule',
+      'unified-delay': true,
       'log-level': 'debug',
       'external-controller': `127.0.0.1:${apiPort}`,
       secret,
       proxies: [proxy],
       rules: ['MATCH,DIRECT']
     };
-    fs.writeFileSync(configFile, yaml.stringify(configData), 'utf8');
+    fs.writeFileSync(configFile, yaml.stringify(probeConfig), 'utf8');
 
     const lines = [];
     let proc = null;
@@ -478,14 +483,20 @@ class MihomoTester {
       const delay = await this.testSingleProxyDelay(proxyName, testUrl, timeout, apiPort, secret);
       await new Promise(r => setTimeout(r, 600));
 
+      // 同时探一下「本机环境」：出口 IP + 不经节点的同一 URL 基线耗时。
+      // 如果这里出口 IP 不是你家的宽带 IP，说明 NAS 的出站被旁路由/网关整体代理了，
+      // 所有节点延迟都会额外多一跳，看起来就比客户端实测高很多。
+      const env = await this.probeEnvironment(testUrl);
+
       if (delay > 0) {
-        return { ok: true, delay, reason: `连通正常 (${delay} ms)`, detail: lines.slice(-8) };
+        return { ok: true, delay, reason: `连通正常 (${delay} ms)`, env, detail: lines.slice(-8) };
       }
       const interesting = lines.filter(l => /error|warning|REALITY|fail|refused|timeout|unreachable/i.test(l));
       return {
         ok: false,
         delay,
         reason: this.explainMihomoLogs(lines),
+        env,
         detail: (interesting.length ? interesting : lines).slice(-10)
       };
     } catch (e) {
@@ -496,6 +507,41 @@ class MihomoTester {
       }
       try { if (fs.existsSync(configFile)) fs.unlinkSync(configFile); } catch (e) {}
     }
+  }
+
+  /**
+   * 探测本机出站环境：出口 IP + 不经节点直接请求 testUrl 的耗时（基线）
+   * 用于判断「面板延迟偏高」是本机网络环境造成的，还是节点本身的问题
+   */
+  probeEnvironment(testUrl) {
+    const fetchText = (target, timeoutMs) => new Promise(resolve => {
+      const mod = /^https:/i.test(target) ? require('https') : http;
+      const started = Date.now();
+      let done = false;
+      const finish = (val) => { if (!done) { done = true; resolve(val); } };
+      const req = mod.get(target, { timeout: timeoutMs, headers: { 'User-Agent': 'sub-hub-diagnose' } }, res => {
+        let body = '';
+        res.on('data', c => { if (body.length < 2000) body += c; });
+        res.on('end', () => finish({ ok: true, ms: Date.now() - started, body }));
+      });
+      req.on('timeout', () => { req.destroy(); finish({ ok: false, ms: -1, body: '' }); });
+      req.on('error', () => finish({ ok: false, ms: -1, body: '' }));
+    });
+
+    return (async () => {
+      const env = { egressIp: '', baselineMs: -1 };
+      try {
+        const ip = await fetchText('https://api.ipify.org?format=json', 4000);
+        if (ip.ok) {
+          try { env.egressIp = JSON.parse(ip.body).ip || ''; } catch (e) { env.egressIp = (ip.body || '').trim(); }
+        }
+      } catch (e) {}
+      try {
+        const base = await fetchText(testUrl, 6000);
+        if (base.ok) env.baselineMs = base.ms;
+      } catch (e) {}
+      return env;
+    })();
   }
 
   /**

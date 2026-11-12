@@ -1278,10 +1278,15 @@ const diagnoseNode = async (node) => {
   try {
     const r = await api.post(`/nodes/${node.id}/diagnose`, {});
     const head = r.ok ? `✓ 连通正常：${r.delay} ms` : `✗ ${r.reason}`;
+    const env = r.env || {};
+    const envLines = [];
+    if (env.egressIp) envLines.push(`本机出口 IP：${env.egressIp}`);
+    if (typeof env.baselineMs === 'number' && env.baselineMs > 0) envLines.push(`不经节点的基线耗时：${env.baselineMs} ms`);
+    const envBlock = envLines.length ? '\n\n— 本机环境 —\n' + envLines.join('\n') : '';
     const tail = Array.isArray(r.detail) && r.detail.length
       ? '\n\n— 内核日志（尾部）—\n' + r.detail.slice(-8).join('\n')
       : '';
-    alert(`【${node.name}】\n${head}${tail}`);
+    alert(`【${node.name}】\n${head}${envBlock}${tail}`);
   } catch (e) {
     alert('诊断失败: ' + (e.message || e));
   } finally {
